@@ -9,7 +9,7 @@
   if (window.__twCardLoaded) return;
   window.__twCardLoaded = true;
 
-  const VERSION = '3.42.0';
+  const VERSION = '3.43.0';
 
   /* 面板尺寸偏好：紧凑(tc-mini)/完整。localStorage 持久化，点击 .tc-size 全局切换 */
   const SIZE_KEY = 'tw-card:size';
@@ -78,7 +78,7 @@
 
   /* ══════════ 基础工具 ══════════ */
 
-  const KEYS = 'scene|team|quest|check|result|world|next|bond[0-9]*|foe[0-9]*|nb[0-9]*|nf[0-9]*|nh[0-9]*|nd[0-9]*|nl[0-9]*|npc[0-9]*|kbnpc[0-9]*|ntrnpc[0-9]*|kbm[0-9]*|kbf[0-9]*|dmg[0-9]*|sh[0-9]*|dz[0-9]*|wh[0-9]*|pl[0-9]*|lk[0-9]*|kbmsk[0-9]*|kbfsk[0-9]*|pts[0-9]+|lock[0-9]+|ti[0-9]+|cr[0-9]+|p[0-9]+|sk[0-9]+|eq[0-9]+|mob[0-9]*|kbl[0-9]*|yz[0-9]*|ack|pace';
+  const KEYS = 'scene|team|quest|check|result|world|next|bond[0-9]*|foe[0-9]*|nb[0-9]*|nf[0-9]*|nh[0-9]*|nd[0-9]*|nl[0-9]*|npc[0-9]*|kbnpc[0-9]*|ntrnpc[0-9]*|kbm[0-9]*|kbf[0-9]*|dmg[0-9]*|sh[0-9]*|dz[0-9]*|wh[0-9]*|pl[0-9]*|lk[0-9]*|kbmsk[0-9]*|kbfsk[0-9]*|pts[0-9]+|lock[0-9]+|ti[0-9]+|cr[0-9]+|p[0-9]+|sk[0-9]+|eq[0-9]+|mob[0-9]*|kbl[0-9]*|yz[0-9]*|zw|ack|pace';
   const LINE_RE = new RegExp('^[ \\t]*(' + KEYS + ')[:：][ \\t]*(.*)$', 'i');
   /* 拓展键登记表（AGENTS.md §3.1 规则 7）四列：键前缀 | base 名 | 渲染器 | 主题 class
      （派生第五列 field = 状态对象存放字段）。编号一律按「键前缀长度」取，禁字面量偏移
@@ -1372,7 +1372,7 @@
   function parseState(text) {
     const st = {
       scene: '', team: '', quest: null, checks: [],
-      players: [], npcs: [], kbnpcs: [], ntrnpcs: [], bonds: [], foes: [], mobs: [], ntrBonds: [], ntrFoes: [], ntrHearts: [], ntrFalls: [], ntrLogs: [], mechas: [], familiars: [], dmgs: [], shelters: [], disasters: [], warehouses: [], places: [], geneLocks: [], crOrphans: [], orphans: [], ack: null, pace: null, kbls: [], yzs: [],
+      players: [], npcs: [], kbnpcs: [], ntrnpcs: [], bonds: [], foes: [], mobs: [], ntrBonds: [], ntrFoes: [], ntrHearts: [], ntrFalls: [], ntrLogs: [], mechas: [], familiars: [], dmgs: [], shelters: [], disasters: [], warehouses: [], places: [], geneLocks: [], crOrphans: [], orphans: [], ack: null, pace: null, zw: null, kbls: [], yzs: [],
       result: '', world: '', next: '',
     };
     const pmap = new Map(), smap = new Map(), emap = new Map();
@@ -1412,6 +1412,7 @@
       else if (k === 'team') st.team = v;
       else if (k === 'ack') st.ack = parseAck(v);
       else if (k === 'pace') st.pace = parsePace(v);
+      else if (k === 'zw') st.zw = parseZw(v);
       else if (k === 'quest') st.quest = parseQuest(v);
       else if (k === 'check') checks.push(parseCheck(v));
       else if (k === 'result') st.result = v;
@@ -2481,7 +2482,24 @@
   });
   const YZ_COLORS = { '风': '#BFE9FF', '地': '#C89B54', '水': '#3E7BFA', '火': '#FF6B4A', '秩序': '#A07BFF', '混沌': '#2E4A3F' };
   const TW_NAMES = ['永', '粘', '临'];
-  const TW_COLORS = ['#FFC24D', '#B98A3E', '#7A5A2E'];
+  /* 邪术研究六项（闭集）：眼 邪术之眼 / 碑 方尖碑共鸣 / 门 传送门仪式 / 冶 虚空冶炼 / 同 腐化同化 / 猩 猩红辨析 */
+  const YZ_RESEARCH = ['眼', '碑', '门', '冶', '同', '猩'];
+  const YZ_RES_CAP = 5;          /* 每项格数上限：条目侧定稿前统一 5（原稿「每项 3–5 格、达上限即完成」） */
+  const TW_TOTAL_CAP = 100;      /* 扭 总累加上限：超了按 100 显示，并写出真实值 */
+  const TW_GATES = [25, 50];     /* 禁忌式一阶 / 二阶 的门 */
+  const ZW_BANDS = [[0, 30], [31, 60], [61, 80], [81, 95], [96, 100]];
+  const ZW_TICKS = [30, 60, 90]; /* 不适 / 生态 / 裂隙必成 */
+  const ZW_STELE = ['沉睡', '低鸣', '醒'];
+  const parseYzResearch = (s) => {
+    const raw = String(s || '').trim();
+    if (!raw || /^(无|没有|空|—|–|-)$/i.test(raw)) return [];
+    return raw.split(/[\s、,，·]+/).filter(Boolean).map(tok => {
+      const m = tok.match(/^(.+?)(\d+)?$/);
+      return m ? { name: m[1], n: m[2] == null ? 1 : +m[2] } : { name: tok, n: 1 };
+    });
+  };
+  const TW_COLORS = ['#2e1065', '#9d174d', '#6b5b95'];   /* 永 凝固深紫 / 粘 暗紫红 / 临 灰紫褪色 */
+  const TW_TEX = ['crack', 'sticky', 'faint'];           /* 三层纹理不同：色弱也能分 */
 
   function parseYz(v) {
     const o = { stage: '', solved: [], slots: [], unsolved: [], cap: 7, twist: { yong: null, zhan: null, lin: null }, bad: [], unknown: [], errs: [], raw: String(v || '') };
@@ -2492,6 +2510,8 @@
       if (k === '阶') o.stage = val;
       else if (k === '解') { o.slots = parseYzSlots(val); o.solved = o.slots.map(x => x.name); }
       else if (k === '未') o.unsolved = nameList(val);
+      else if (k === '研') o.research = parseYzResearch(val);
+      else if (k === '线') { const ln = val.match(/-?\d+/); o.line = ln ? +ln[0] : null; }
       else if (k === '扭') {
         const g = (re) => { const x = val.match(re); return x ? +x[1] : null; };
         o.twist.yong = g(/永\s*(-?\d+(?:\.\d+)?)/);
@@ -2501,6 +2521,8 @@
       else o.unknown.push(seg);
     });
     o.bad = [...new Set(o.solved.filter(n => YZ_ORDER.indexOf(n) < 0))];
+    if (!o.research) o.research = [];          /* 研 可省：一项都没有等于空表 */
+    if (o.line == null) o.line = 0;             /* 线 可省：按 0 读，不报警 */
     o.total = YZ_ORDER.length;
     o.cap = capOf(o.stage);
     o.pts = {};
@@ -2516,8 +2538,23 @@
     const open = foldOpen(owner || 'p1', 'yz', y.solved.length);
     const t = y.twist;
     const tv = (v) => (v == null ? '—' : String(v));
-    const warn = y.bad.length
-      ? `<div class="kb-warn">⚠ 未识别的元名（照原样显示，不当作解析错误）：${esc(y.bad.join('、'))}</div>` : '';
+    /* 扭曲总 = 永+粘+临（缺项按 0 计）——两层阈值是禁忌式一阶/二阶的门，玩家要能一眼看出还差几点 */
+    const tws = [t.yong, t.zhan, t.lin].map(v => (v == null ? 0 : +v));
+    const twTotal = tws[0] + tws[1] + tws[2];
+    const twShown = Math.max(0, Math.min(TW_TOTAL_CAP, twTotal));
+    const twWarns = [];
+    if (twTotal > TW_TOTAL_CAP) twWarns.push(`扭 总 ${twTotal} > ${TW_TOTAL_CAP} —— 卡面按 ${TW_TOTAL_CAP} 显示（真实值 ${twTotal}）`);
+    /* 解 + 未 必须正好是六元：缺谁、多谁，点名不点数量 */
+    const named = YZ_ORDER.filter(n => on.has(n) || (y.unsolved || []).indexOf(n) >= 0);
+    const missTw = YZ_ORDER.filter(n => named.indexOf(n) < 0);
+    const extraTw = (y.unsolved || []).filter(n => YZ_ORDER.indexOf(n) < 0);
+    if (missTw.length) twWarns.push(`解 + 未 ≠ 六元（六项对不上）：缺 ${missTw.join('、')}`);
+    if (extraTw.length) twWarns.push(`解 + 未 ≠ 六元（六项对不上）：多 ${extraTw.join('、')}`);
+    const unkRes = (y.research || []).filter(r => YZ_RESEARCH.indexOf(r.name) < 0).map(r => r.name);
+    if (unkRes.length) twWarns.push(`研 项名不在闭集（照原样显示，不计格数）：${unkRes.join('、')}`);
+    const warn = (y.bad.length
+      ? `<div class="kb-warn">⚠ 未识别的元名（照原样显示，不当作解析错误）：${esc(y.bad.join('、'))}</div>` : '')
+      + twWarns.map(w => `<div class="kb-warn">⚠ ${esc(w)}</div>`).join('');
     const cap = y.cap == null ? 7 : y.cap;
     const ptsTxt = (n) => {
       if (!on.has(n)) return '未解锁';
@@ -2534,6 +2571,36 @@
       return `<div class="yz-n${isOn ? ' on' : ''}" style="left:${q[0]}%;top:${tp.toFixed(2)}%;--yzn:${c}" data-pts="${esc(ptsTxt(n))}">` +
         `<b>${esc(n)}</b><em>${esc(ptsTxt(n))}</em></div>`;
     };
+    /* 扭曲总：条 + 25/50 两道刻度，右边直接写「还差几点」 */
+    const twGateHint = twShown >= TW_GATES[1] ? '已过二阶'
+      : (twShown >= TW_GATES[0] ? `二阶差 ${TW_GATES[1] - twShown}` : `一阶差 ${TW_GATES[0] - twShown}`);
+    const twLine = `<div class="yz-twline" data-tw-total="${twTotal}" data-tw-shown="${twShown}">` +
+      `<b>扭 总 ${twShown}</b>` +
+      `<span class="yz-twbar"><i style="width:${twShown}%"></i>` +
+        TW_GATES.map(g => `<em class="yz-twgate" style="left:${g}%" data-gate="${g}"><s>${g}</s></em>`).join('') +
+      `</span><i class="yz-twneed">${esc(twGateHint)}</i></div>`;
+    /* 三层各自独立成条，而且**三种病态在纹理上就不一样**：永 有裂纹（凝固/坏死）、
+       粘 边不规则（粘稠/渗）、临 整体褪色（快没了）。只靠色相分，色弱与灰度屏都读不出来。 */
+    const tw3Html = `<div class="yz-tw3" data-tw3="3">` + TW_NAMES.map((nm, i) => {
+      const v = [y.twist.yong, y.twist.zhan, y.twist.lin][i];
+      const n = (v == null ? 0 : Math.max(0, Math.min(TW_TOTAL_CAP, +v)));
+      return `<span class="yz-tw1 t${i}" data-tw="${nm}" data-n="${v == null ? '' : v}" data-tx="${TW_TEX[i]}">` +
+        `<b>${nm}</b><em>${v == null ? '—' : n}</em>` +
+        `<s class="yz-tw1bar"><u style="width:${n}%"></u></s></span>`;
+    }).join('') + `</div>`;
+    /* 研：六个小进度点，已完成（达上限）与在研必须长得不一样 */
+    const resRows = (y.research || []).map(r => {
+      const known = YZ_RESEARCH.indexOf(r.name) >= 0;
+      const n = known ? Math.max(0, Math.min(YZ_RES_CAP, r.n)) : 0;
+      const done = known && r.n >= YZ_RES_CAP;
+      const cells = known
+        ? Array.from({ length: YZ_RES_CAP }, (_, i) => `<s class="${i < n ? 'on' : ''}"></s>`).join('')
+        : `<u class="raw">${esc(String(r.n))}</u>`;
+      return `<span class="yz-resx${done ? ' done' : ''}${known ? '' : ' unk'}" data-res="${esc(r.name)}" data-n="${esc(String(r.n))}">` +
+        `<b>${esc(r.name)}</b><em>${cells}</em></span>`;
+    }).join('');
+    const resHtml = resRows
+      ? `<div class="yz-res"><b class="yz-res-hd">研</b>${resRows}</div>` : '';
     const cls = `tc-yz grade-${grade} ${open ? 'open' : 'closed'}${ss ? ' dual' : ''}${sss ? ' full' : ''}`;
     return `<div class="${cls}" data-fold="${esc((owner || 'p1') + '|yz')}" data-grade="${grade}">` +
       `<div class="kf-hd" role="button" tabindex="0">` +
@@ -2541,6 +2608,7 @@
         `<i class="kb-kind">${esc(entry ? entry.kind : '内功')}</i>` +
         `<i class="kb-stage">阶 ${esc(y.stage || '—')}</i>` +
         `<i class="kb-used">解 ${y.solved.length}/${y.total}</i>` +
+        (y.line > 0 ? `<i class="kb-line">线 ${y.line}</i>` : '') +
         `<i class="yz-tw">扭 ${TW_NAMES.map((n, i) => n + tv([t.yong, t.zhan, t.lin][i])).join(' ')}</i>` +
         (ss ? `<span class="kf-seal">${grade}</span>` : '') +
         `<span class="kf-ar" aria-hidden="true"></span>` +
@@ -2550,7 +2618,69 @@
         YZ_ORDER.map(dot).join('') +
         `<div class="yz-hub">${TW_NAMES.map((n, i) => `<em style="color:${TW_COLORS[i]}">${n} ${tv([t.yong, t.zhan, t.lin][i])}</em>`).join('')}</div>` +
         `<i class="yz-orbit"></i>` +
-      `</div>${warn}</div>` +
+      `</div>${twLine}${tw3Html}${resHtml}${warn}</div>` +
+      `</div>`;
+  }
+
+  /* ── zw：邪术环境（团队级无编号，一个场次一行）──
+     `zw: 浓 42 ｜ 隙 2 ｜ 腐 1 ｜ 碑 低鸣`
+     浓 必写；隙 / 腐 缺省 0；碑 可省（省了不显示这段）。不在有源质的场次里就不写这行——
+     所以「缺行」= 没这套体系（不渲染、不报警），「浓 0」= 有体系但浓度为零（照样画）。 */
+  function parseZw(v) {
+    const o = { conc: null, gap: 0, rot: 0, stele: '', errs: [], warns: [], raw: String(v || '') };
+    String(v || '').split(/[｜|]/).map(x => x.trim()).filter(Boolean).forEach(seg => {
+      const m = seg.match(/^([^\s:：]{1,6})\s*[:：]?\s*([\s\S]*)$/);
+      if (!m) return;
+      const k = m[1], val = (m[2] || '').trim();
+      if (k === '浓' || k === '浓度') { const x = val.match(/-?\d+(?:\.\d+)?/); o.conc = x ? +x[0] : null; }
+      else if (k === '隙' || k === '裂隙') { const x = val.match(/-?\d+/); o.gap = x ? +x[0] : 0; }
+      else if (k === '腐' || k === '腐化') { const x = val.match(/-?\d+/); o.rot = x ? +x[0] : 0; }
+      else if (k === '碑' || k === '方尖碑') o.stele = val;
+      else o.errs.push(seg);
+    });
+    /* 边界：超 0–100 按边界显示并写出真实值（浓 必写，缺了按 0 显示但不报警：缺行本身已有语义） */
+    const rawC = o.conc;
+    o.concRaw = rawC;
+    o.conc = rawC == null ? null : Math.max(0, Math.min(100, rawC));
+    o.gapRaw = o.gap;
+    o.rotRaw = o.rot;
+    o.gap = Math.max(0, Math.min(5, o.gap));      /* 裂隙格数 0–5 */
+    o.rot = Math.max(0, o.rot);
+    if (rawC != null && (rawC > 100 || rawC < 0)) {
+      o.warns.push(`浓 ${rawC} 越界（0–100）—— 卡面按 ${o.conc} 显示（真实值 ${rawC}）`);
+    }
+    if (o.gapRaw !== o.gap) o.warns.push(`隙 ${o.gapRaw} 越界（0–5）—— 卡面按 ${o.gap} 显示`);
+    if (o.stele && ZW_STELE.indexOf(o.stele) < 0) o.warns.push(`碑 状态不在闭集（照原样显示）：${o.stele}`);
+    o.band = 0;
+    ZW_BANDS.forEach((b, i) => { if (o.conc != null && o.conc >= b[0] && o.conc <= b[1]) o.band = i; });
+    return o;
+  }
+
+  function renderZw(z) {
+    if (!z) return '';
+    const conc = z.conc;
+    const showConc = conc == null ? '—' : String(conc);
+    /* 五段底 + 刻度：0–30 不适 / 31–60 生态 / 61–80 / 81–95 / 96–100 裂隙必成 */
+    const segs = ZW_BANDS.map((b, i) => {
+      const w = b[1] - b[0] + (b[0] === 0 ? 0 : 0);
+      return `<i class="zw-s${i}" style="flex:0 0 ${(b[1] - b[0] + 1)}%"></i>`;
+    }).join('');
+    const fills = conc == null ? '' : `<b class="zw-fill" style="width:${conc}%"></b>`;
+    const ticks = ZW_TICKS.map(t => `<em class="zw-tk" style="left:${t}%" data-tk="${t}"></em>`).join('');
+    const gapPips = Array.from({ length: 5 }, (_, i) => `<s class="${i < (z.gap || 0) ? 'on' : ''}"></s>`).join('');
+    const rotMax = Math.max(5, z.rot || 0);
+    const rotPips = Array.from({ length: rotMax }, (_, i) => `<s class="${i < (z.rot || 0) ? 'on' : ''}"></s>`).join('');
+    const stele = z.stele
+      ? `<i class="zw-stele" data-stele="${esc(z.stele)}">碑 ${esc(z.stele)}</i>` : '';
+    return `<div class="tc-zw" data-conc="${conc == null ? '' : conc}" data-band="${z.band}" data-gap="${z.gap || 0}" data-rot="${z.rot || 0}">` +
+      `<div class="zw-hd"><b>咒波</b><i class="zw-kind">HEXWAVE</i>${stele}` +
+        `<span class="zw-conc">${esc(showConc)}<s>/100</s></span></div>` +
+      `<div class="zw-bar" data-band="${z.band}">${segs}${fills}${ticks}</div>` +
+      `<div class="zw-pips"><b>裂隙</b>${gapPips}<b>腐化</b>${rotPips}</div>` +
+      (z.warns || []).map(w => `<div class="kb-warn">⚠ ${esc(w)}</div>`).join('') +
+      ((z.errs || []).length
+        ? `<div class="kb-warn">⚠ 未识别的段（照原样保留）：${esc((z.errs || []).join(' ｜ '))}</div>`
+        : '') +
       `</div>`;
   }
 
@@ -3174,6 +3304,10 @@
         return e.render(r, 'p' + (r.n || 1), bloodScale(r, ((st.players || [])[(r.n || 1) - 1] || {}).crRow), e);
       }).join('') + '</div>');
     });
+    if (st.zw) {
+      colL.push(sect('邪术 · 咒波', 'HEXWAVE'));
+      colL.push('<div class="tc-zws">' + renderZw(st.zw) + '</div>');
+    }
     if (st.geneLocks.length) {
       colL.push(sect('基因锁', 'GENE LOCK'));
       colL.push(`<div class="tc-locks">${st.geneLocks.map(renderGeneLock).join('')}</div>`);
@@ -4545,6 +4679,131 @@ details[open]>.tc-skfl-ar::after{content:'▴'}
 .kb-warn { margin-top: 4px; font-size: 8.5px; line-height: 1.5; color: #fcd34d;
   background: rgba(251,191,36,.08); border-left: 2px solid #fbbf24; border-radius: 0 3px 3px 0;
   padding: 3px 7px; }
+/* ══════════ 邪术：扭曲三层（紫）+ 咒波卡（血腥 + 紫） ══════════ */
+/* 扭曲总：条 + 25 / 50 两道门刻度。刻度不是装饰——它们是禁忌式一阶/二阶的门。 */
+.yz-twline { display: flex; align-items: center; gap: 6px; margin: 4px 0 1px; font-size: 9px; color: #d8c9f5; }
+.yz-twline > b { font: 700 10px/1 ui-monospace, Consolas, monospace; color: #e9d5ff; white-space: nowrap; }
+.yz-twbar { position: relative; flex: 1 1 auto; height: 6px; border-radius: 3px; background: rgba(168,85,247,.14); }
+.yz-twbar > i { display: block; height: 100%; border-radius: 3px;
+  background: linear-gradient(90deg, #7e22ce, #d946ef); box-shadow: 0 0 6px rgba(217,70,239,.45); }
+.yz-twgate { position: absolute; top: -3px; width: 1px; height: 12px; background: rgba(233,213,255,.75); }
+.yz-twgate > s { position: absolute; top: -10px; left: 0; transform: translateX(-50%); font-size: 7.5px; line-height: 1; color: #c4b5fd; text-decoration: none; white-space: nowrap; }
+.yz-twneed { font-style: normal; color: #c4b5fd; white-space: nowrap; }
+/* 研：六项小进度点；已完成（达上限）走满格亮色 + 名字变色，与「在研」区分 */
+.yz-res { display: flex; flex-wrap: wrap; gap: 3px 9px; margin-top: 5px; }
+.yz-resx { display: flex; align-items: center; gap: 3px; font-size: 9px; color: #cbb9ea; }
+.yz-resx > b { font-weight: 400; }
+.yz-resx > em { font-style: normal; display: flex; gap: 2px; }
+.yz-resx > em > s { width: 6px; height: 6px; border-radius: 1px; text-decoration: none;
+  border: 1px solid rgba(196,181,253,.42); background: rgba(255,255,255,.03); }
+.yz-resx > em > s.on { background: #a855f7; border-color: #d8b4fe; }
+.yz-resx.done > b { color: #f5d0fe; }
+.yz-resx.done > em > s { background: #e879f9; border-color: #f5d0fe; box-shadow: 0 0 5px rgba(232,121,249,.6); }
+.yz-resx.unk > em > u { text-decoration: none; color: #fca5a5; border-bottom: 1px dashed rgba(252,165,165,.6); }
+/* 扭曲三层：三条独立横条，行间隔就是边界 */
+.yz-tw3 { display: flex; flex-direction: column; gap: 2px; margin: 4px 0 1px; }
+.yz-tw1 { display: flex; align-items: center; gap: 5px; font: 9px/1.5 ui-monospace, Consolas, monospace;
+  color: #d8c9f5; padding: 1px 0; border-bottom: 1px dotted rgba(196,181,253,.14); }
+.yz-tw1:last-child { border-bottom: 0; }
+.yz-tw1 > b { flex: 0 0 auto; width: 12px; font-weight: 700; }
+.yz-tw1 > em { flex: 0 0 22px; font-style: normal; text-align: right; font-variant-numeric: tabular-nums;
+  color: #ffffff; text-shadow: 0 0 6px rgba(0,0,0,.85); }
+.yz-tw1bar { flex: 1 1 auto; height: 7px; overflow: hidden; position: relative;
+  background: rgba(255,255,255,.04); }
+.yz-tw1bar > u { display: block; height: 100%; }
+/* 永：凝固/坏死 —— 深紫底 + 高对比裂纹（不是渐变条纹，要像干裂） */
+.yz-tw1.t0 > b { color: #a78bfa; }
+.yz-tw1.t0 .yz-tw1bar { border-radius: 0; background:
+    repeating-linear-gradient(112deg, rgba(167,139,250,.16) 0 1.5px, transparent 1.5px 6px),
+    repeating-linear-gradient(58deg, rgba(167,139,250,.10) 0 1px, transparent 1px 9px),
+    rgba(46,16,101,.30); }
+.yz-tw1.t0 .yz-tw1bar > u { background:
+    repeating-linear-gradient(112deg, rgba(0,0,0,.92) 0 1.5px, transparent 1.5px 6px),
+    repeating-linear-gradient(58deg, rgba(0,0,0,.72) 0 1px, transparent 1px 9px),
+    repeating-linear-gradient(90deg, rgba(0,0,0,.55) 0 1px, transparent 1px 11px),
+    linear-gradient(180deg, #3b1580 0%, #2e1065 45%, #150827 100%); }
+.yz-tw1.t0 > em { color: #ede9fe; }
+/* 粘：粘稠/渗 —— 暗紫红 + 一团团渗色（不是条纹），边不规则 */
+.yz-tw1.t1 > b { color: #f0abfc; }
+.yz-tw1.t1 .yz-tw1bar { border-radius: 2px 9px 3px 6px; background:
+    radial-gradient(30% 130% at 10% 48%, rgba(244,114,182,.20), transparent 72%),
+    radial-gradient(26% 120% at 52% 60%, rgba(244,114,182,.16), transparent 74%),
+    rgba(157,23,77,.26); }
+.yz-tw1.t1 .yz-tw1bar > u { background:
+    radial-gradient(38% 130% at 12% 48%, rgba(255,214,235,.55), transparent 70%),
+    radial-gradient(26% 120% at 46% 40%, rgba(244,114,182,.42), transparent 72%),
+    radial-gradient(30% 140% at 78% 62%, rgba(190,24,93,.55), transparent 70%),
+    linear-gradient(90deg, #9d174d, #6d1039);
+    border-radius: 2px 9px 3px 6px; }
+.yz-tw1.t1 > em { color: #ffe4f1; }
+/* 临：正在褪 —— 灰紫 + 断续（像在掉） + 整体半透明 */
+.yz-tw1.t2 > b { color: #b9a8d8; opacity: .86; }
+.yz-tw1.t2 .yz-tw1bar { background:
+    repeating-linear-gradient(90deg, rgba(196,181,253,.22) 0 2px, transparent 2px 8px),
+    rgba(107,91,149,.14); }
+.yz-tw1.t2 .yz-tw1bar > u { background:
+    repeating-linear-gradient(90deg, #8f7fb8 0 3px, rgba(143,127,184,0) 3px 7px);
+    opacity: .78; }
+.yz-tw1.t2 > em { opacity: .86; color: #ddd6fe; }
+.yz-res-hd { flex: 0 0 auto; font-weight: 700; color: #e9d5ff; margin-right: 3px; font-size: 9px; }
+.yz-resx > em > s { width: 7px; height: 7px; }
+.kb-line { border: 1px solid rgba(196,181,253,.45); color: #d8b4fe; background: rgba(168,85,247,.14);
+  font-family: ui-monospace, Consolas, monospace; }
+/* 咒波卡：暗红底 + 紫光描边（用户原话「邪术相关则应该是血腥加紫的感觉」） */
+.tc-zws { display: flex; flex-direction: column; gap: 6px; }
+.tc-zw { position: relative; padding: 8px 10px 9px; border-radius: 5px; overflow: hidden;
+  /* 脏：低饱和暗红底 + 双向细颗粒 + 暗角（三层各压一件事，不用整图噪点） */
+  background:
+    radial-gradient(130% 88% at 50% -10%, rgba(120,22,32,.50), rgba(8,3,5,.55) 58%, rgba(4,2,3,.92) 100%),
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='120' height='120' filter='url(%23n)' opacity='0.16'/></svg>"),
+    repeating-linear-gradient(0deg, rgba(255,240,240,.085) 0 1px, transparent 1px 3px),
+    repeating-linear-gradient(90deg, rgba(255,240,240,.055) 0 1px, transparent 1px 4px),
+    linear-gradient(162deg, #3a1014, #240a0e 55%, #180507);
+  /* 紫边从「发光」改成「暗紫渗边」：不 glow，只在边内侧渗一圈 */
+  border: 1px solid rgba(76,29,149,.62); border-left: 3px solid rgba(76,29,149,.92);
+  box-shadow: inset 0 0 30px rgba(0,0,0,.72), inset 2px 0 9px rgba(76,29,149,.30); }
+/* 锈痕：2 段断开的深褐斑压左缘（连续直线会读成边框，断开才像痕迹） */
+.tc-zw::before { content: ''; position: absolute; left: 0; top: 6px; bottom: 8px; width: 3px; z-index: 1;
+  background: repeating-linear-gradient(180deg,
+    rgba(74,26,18,.98) 0 11px, transparent 11px 22px, rgba(58,22,16,.85) 22px 33px, transparent 33px 47px, rgba(74,26,18,.70) 47px 54px, transparent 54px 100%);
+  filter: blur(.3px);
+  pointer-events: none; }
+/* 底缘一道更淡的锈迹，与左缘错开 */
+.tc-zw::after { content: ''; position: absolute; left: 12px; right: 30px; bottom: 0; height: 2px; z-index: 1;
+  background: repeating-linear-gradient(90deg,
+    rgba(61,20,16,.80) 0 18px, transparent 18px 33px, rgba(61,20,16,.55) 33px 44px, transparent 44px 100%);
+  pointer-events: none; }
+.zw-hd { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #f6d9e4; }
+.zw-hd > b { font-weight: 700; letter-spacing: .04em; }
+.zw-kind { font-style: normal; font-size: 8px; letter-spacing: .10em; color: #c084fc; opacity: .8;
+  border: 1px solid rgba(168,85,247,.35); border-radius: 3px; padding: 0 4px; }
+.zw-stele { font-style: normal; font-size: 9px; margin-left: 2px; padding: 1px 5px; border-radius: 3px;
+  border: 1px solid rgba(232,121,249,.45); color: #f0abfc; background: rgba(168,85,247,.14); }
+.zw-stele[data-stele="醒"] { border-color: #f43f5e; color: #fecdd3; background: rgba(244,63,94,.18);
+  box-shadow: 0 0 6px rgba(244,63,94,.45); }
+.zw-stele[data-stele="沉睡"] { border-color: rgba(148,163,184,.4); color: #cbd5e1; background: rgba(148,163,184,.12); }
+.zw-conc { margin-left: auto; font: 700 16px/1 ui-monospace, Consolas, monospace;
+  font-variant-numeric: tabular-nums; color: #fff1f5; text-shadow: 0 0 8px rgba(255,120,160,.45); }
+.zw-conc > s { font-size: 9px; font-weight: 400; text-decoration: none; color: #b98a9c; margin-left: 1px; }
+.zw-bar { position: relative; display: flex; height: 9px; margin: 6px 0 2px; border-radius: 2px;
+  overflow: hidden; background: rgba(255,255,255,.05); }
+.zw-bar > i { height: 100%; }
+.zw-s0 { background: rgba(56,189,248,.28); }
+.zw-s1 { background: rgba(74,222,128,.22); }
+.zw-s2 { background: rgba(250,204,21,.28); }
+.zw-s3 { background: rgba(251,146,60,.22); }
+.zw-s4 { background: rgba(244,63,94,.29); }
+.zw-fill { position: absolute; left: 0; top: 0; height: 100%; z-index: 2;
+  background: linear-gradient(90deg, #f43f5e, #d946ef);
+  box-shadow: inset 0 0 6px rgba(255,255,255,.28), 0 0 6px rgba(217,70,239,.40); }
+.zw-tk { position: absolute; top: -1px; width: 1px; height: 11px; z-index: 3;
+  background: rgba(255,255,255,.72); box-shadow: 0 0 2px rgba(0,0,0,.65); }
+.zw-pips { display: flex; align-items: center; gap: 3px; margin-top: 5px; font-size: 9px; color: #d8a7b8; }
+.zw-pips > b { font-weight: 400; margin-right: 2px; }
+.zw-pips > b + s { margin-right: 7px; }
+.zw-pips > s { width: 9px; height: 9px; border-radius: 2px; transform: rotate(45deg);
+  border: 1px solid rgba(255,180,200,.40); background: rgba(255,255,255,.04); }
+.zw-pips > s.on { background: #a21caf; border-color: #e879f9; box-shadow: 0 0 5px rgba(232,121,249,.55); }
 /* ══════════ sh 避难所卡（海上载体） ══════════
    判据：遮住文字只看轮廓 —— kbm 是直角切角钢板、fam 是小一号的副卡、ntr 是竖排绯红、
    kb 是紫金，shelter 必须是「圆角浮筒 + 锈斑 + 一条水位线」。四张并排时先被认出来的是那条水线。 */
@@ -4773,6 +5032,6 @@ details[open]>.tc-skfl-ar::after{content:'▴'}
 
   /* 仅供测试，非公开 API，可随实现变动 */
   window.__twCard = {
-    yzDriftOf: yzDriftOf, prevFloorOf: prevFloorOf, version: VERSION, parseState, render, sweep, keys: EXT_KEYS, extractBlock: extractBlock, extHit: extHit, CSS: CSS, injectCss: injectCss, parseShelter, parseDisaster, parseWarehouse, parsePlace, splitInlineKeys, keyHits, checkAudit, parseCr, parseKbl, parseYz, parseAck, ackOf, parsePace, paceOf, paceWarnOf, kblDriftOf, kblSnapOf, kblStep, BLOOD_KEYS: BLOOD_KEYS, bloodCapLine: bloodCapLine, bloodScale: bloodScale };
+    yzDriftOf: yzDriftOf, prevFloorOf: prevFloorOf, version: VERSION, parseState, render, sweep, keys: EXT_KEYS, extractBlock: extractBlock, extHit: extHit, CSS: CSS, injectCss: injectCss, parseShelter, parseDisaster, parseWarehouse, parsePlace, splitInlineKeys, keyHits, checkAudit, parseCr, parseKbl, parseYz, parseZw, parseAck, ackOf, parsePace, paceOf, paceWarnOf, kblDriftOf, kblSnapOf, kblStep, BLOOD_KEYS: BLOOD_KEYS, bloodCapLine: bloodCapLine, bloodScale: bloodScale };
   console.log('[tw-card] v' + VERSION + ' ready');
 })();
