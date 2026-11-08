@@ -9,7 +9,7 @@
   if (window.__twCardLoaded) return;
   window.__twCardLoaded = true;
 
-  const VERSION = '3.51.0';
+  const VERSION = '3.52.0';
 
   /* 面板尺寸偏好：紧凑(tc-mini)/完整。localStorage 持久化，点击 .tc-size 全局切换 */
   const SIZE_KEY = 'tw-card:size';
@@ -271,10 +271,15 @@
        禁令原本针对「未登记键」：给它加 warn 会让它看起来已被处理，把可见变静默。
        这里方向相反——把静默变可见。判据：这条 warn 出现时玩家看到的是「少了一块」
        还是「正常画面」？少一块 → 允许。 */
+  /* 所有「丢了一块」的路径都从这里出 —— 全文件只留这一处 console.warn 调用，
+     免得白名单（keys.test.js 的 WARN_WHITELIST，长度恰为 1）随丢数据规则增加而变长。 */
+  function mechaWarn(what, rest) {
+    console.warn('[tw-card] kbm 的 ' + what + '、已丢弃：', JSON.stringify(String(rest)));
+  }
   function mechaPair(field, rest) {
     const m = String(rest).match(/^(\d+)(?:\s*\/\s*(\d+))?$/);
     if (m) return { cur: +m[1], max: m[2] == null ? null : +m[2] };
-    console.warn('[tw-card] kbm 的 ' + field + ' 数值格不合法、已丢弃：', JSON.stringify(String(rest)));
+    mechaWarn(field + ' 数值格不合法', rest);
     return null;
   }
   const MECHA_TYPES = { '人型': 'human', '重装': 'heavy', '全包': 'full' };
@@ -307,6 +312,21 @@
         continue;
       }
       if ((m = x.match(/^(力|敏|体|智|感|魅)[:：]?\s*(-?\d+)$/))) { o.attrs.push({ k: m[1], v: +m[2] }); inEquip = false; inTag = false; continue; }
+      /* 一段里塞多个属性（`力 80 敏 60 体 80`）：AI 合并写法是常态，整段丢掉等于三个属性全没。
+         顺序必须在这里 —— **先单属性、再多属性、最后才是自定值**；反过来的话这段会被
+         自定值正则先抓成 label=`力`，画出一根名字叫「力」的错条。 */
+      const attrHits = [];
+      const attrRe = /(力|敏|体|智|感|魅)[:：]?\s*(-?\d+)/g;
+      let am;
+      while ((am = attrRe.exec(x))) {
+        /* 属性字必须站在词首：`能力 30` 里的「力 30」是词尾，不是属性段；
+           判据看它前一个字符是不是分隔（行首 / 空白 / 竖线 / 逗号 / 冒号）。
+           不加这道，`能力 30` 会被读成 力=30，把自定值字段吃成属性。 */
+        const prev = am.index > 0 ? x[am.index - 1] : '';
+        if (prev && !/[\s｜|,，、·:：]/.test(prev)) continue;
+        attrHits.push({ k: am[1], v: +am[2] });
+      }
+      if (attrHits.length) { attrHits.forEach((a) => o.attrs.push(a)); inEquip = false; inTag = false; continue; }
       if ((m = x.match(/^自(?:\s*[:：]\s*|\s+|$)(.*)$/))) { inTag = true; inEquip = false; if (m[1].trim()) o.tags.push(m[1].trim()); continue; }
 
       /* 型 关键字被省略时的容错：裸段整段恰好是三种型之一、且当前还没有型 → 当作型。
@@ -320,6 +340,13 @@
       /* 自定数值：不认识 `名字 数字` / `名字 数字/数字` 就当拓展字段收下，不丢。
          与 nb 的 o.extra 同一套规矩（同一件事不写第二遍）—— 唯一区别：这里单值也画条，
          按 100 制估，因为机甲的自定刻度（核熔炉 / 装甲 / 散热）没有"上限"这个概念。 */
+      /* 整段是裸数值（`100` / `100/100`）：这一段本来就没有名字，是数值位而不是自定值。
+         放它过去的话 `100/100` 会被切成 label=`10`、a=`0`、b=`100`，画出一根叫「10」的条 ——
+         比不显示更坏。这里截住、丢弃、并在控制台可见（少一根条要有人能查）。 */
+      if (/^\d+(\s*\/\s*\d+)?$/.test(x)) {
+        mechaWarn('自定值段没有名字（整段是裸数值）', x);
+        inEquip = false; inTag = false; continue;
+      }
       if ((m = x.match(/^([^\s：:\/]{1,12})\s*(-?\d+)(?:\s*\/\s*(-?\d+))?$/))) {
         o.extra.push({ label: m[1], a: +m[2], b: m[3] == null ? null : +m[3] });
         inEquip = false; inTag = false; continue;
