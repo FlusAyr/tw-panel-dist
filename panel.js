@@ -9,7 +9,7 @@
   if (window.__twCardLoaded) return;
   window.__twCardLoaded = true;
 
-  const VERSION = '3.41.0';
+  const VERSION = '3.42.0';
 
   /* 面板尺寸偏好：紧凑(tc-mini)/完整。localStorage 持久化，点击 .tc-size 全局切换 */
   const SIZE_KEY = 'tw-card:size';
@@ -2269,12 +2269,30 @@
     return used > 0;
   }
 
+  /* 标签相对节点的纵向偏移，以及基线之下的降部余量。
+     KBL_LAB_H 不是排版微调：少了它，基线贴底的那一行会被 SVG 自己的 viewport 裁掉
+     （真机实测：`王国` 标签底 601.1 > 画布 577.5，`Malkuth` 整块看不见）。 */
+  const KBL_LAB_DY = 26, KBL_LAB_DY_INV = 24, KBL_LAB_H = 8;
+  const KBL_MIRROR = 500;                    /* 逆半棵镜像基准：y' = KBL_MIRROR - y */
+  /* 画布高度由「最靠下的那个标签底边」推出，不写死。
+     写死过一次（250/500），加一个质点就再越界——这种数一旦写死，下次改的人不会记得它在这儿。 */
+  const kblBottomOf = (list, dy, mirror) => Math.max.apply(null, list.map(function (n) {
+    const y = mirror ? (KBL_MIRROR - KBL_XY[n][1]) : KBL_XY[n][1];
+    return y + dy + KBL_LAB_H;
+  }));
+  const KBL_H_UP = kblBottomOf(KBL_ORDER, KBL_LAB_DY, false);
+  const KBL_H_INV = kblBottomOf(KBL_ORDER, KBL_LAB_DY_INV, true);
+
   function kblSvg(k, grade) {
     const hasInv = k.inversed.length > 0;
     const sss = grade === 'SSS';
     const ss = grade === 'SS' || sss;
-    const forceInv = ss && !hasInv;          /* SS 只开一侧：另一侧画半透空框，明示「还差一半」 */
-    const H = (hasInv || forceInv) ? 500 : 250;
+    /* 逆树常驻：`逆 无` 不等于「这棵树没有下半截」，而是「下半截还没吞」。
+       整半棵照画、走 .ghost 暗态——玩家要能看出「这里有一棵树，我还没走到」，
+       而不是看到半张图然后以为坏了（§7 第 27 条：分不清「没有」与「坏了」）。 */
+    const forceInv = !hasInv;
+    /* 两半都要容得下；逆有逆无取同一个值，卡片高度才不会跳（高度跳玩家会读成「整棵树在重排」）。 */
+    const H = Math.max(KBL_H_UP, KBL_H_INV);
     const solved = new Set(k.solved), invd = new Set(k.inversed);
     const actSet = new Set(k.actInf ? [...solved, ...invd] : (k.actList || []));
     const out = [];
@@ -2287,7 +2305,7 @@
       out.push(`<line class="kb-mirror-line" x1="20" y1="250" x2="300" y2="250"/>`);
       KBL_PATHS.forEach(([a, b]) => {
         const A = KBL_XY[KBL_ORDER[a]], B = KBL_XY[KBL_ORDER[b]];
-        out.push(`<line class="kp inv${forceInv ? ' ghost' : ''}" x1="${A[0]}" y1="${500 - A[1]}" x2="${B[0]}" y2="${500 - B[1]}"/>`);
+        out.push(`<line class="kp inv${forceInv ? ' ghost' : ''}" x1="${A[0]}" y1="${KBL_MIRROR - A[1]}" x2="${B[0]}" y2="${KBL_MIRROR - B[1]}"/>`);
       });
       if (forceInv) out.push(`<line class="kb-pillar-ghost" x1="160" y1="14" x2="160" y2="486"/>`);
     }
@@ -2295,7 +2313,7 @@
       out.push(`<line class="kb-pillar" x1="160" y1="12" x2="160" y2="488"/>`);
       KBL_ORDER.forEach(n => {
         const P = KBL_XY[n];
-        out.push(`<line class="kb-sym" x1="${P[0]}" y1="${P[1]}" x2="${P[0]}" y2="${500 - P[1]}"/>`);
+        out.push(`<line class="kb-sym" x1="${P[0]}" y1="${P[1]}" x2="${P[0]}" y2="${KBL_MIRROR - P[1]}"/>`);
       });
     }
     /* Da'at：空心菱形 + 虚线 + 极淡白，三态恒亮（它是「活节点的存在」，不是获得的东西） */
@@ -2312,17 +2330,17 @@
       if (act) out.push(`<circle class="kn-ring" cx="${P[0]}" cy="${P[1]}" r="17" style="fill:none;stroke:${c};stroke-opacity:.85;stroke-width:2.2"/>`);
       else if (on) out.push(`<circle class="kn-ring idle" cx="${P[0]}" cy="${P[1]}" r="17" style="fill:none;stroke:${c};stroke-opacity:.28;stroke-width:1;stroke-dasharray:2 3"/>`);
       const L = enLabel(n, false);
-      out.push(`<text class="kb-lab"${L.text !== L.full ? ` data-full="${esc(L.full)}"` : ''} x="${P[0]}" y="${P[1] + 26}" text-anchor="middle">${esc(L.text)}${L.text !== L.full ? `<title>${esc(L.full)}</title>` : ''}</text>`);
+      out.push(`<text class="kb-lab"${L.text !== L.full ? ` data-full="${esc(L.full)}"` : ''} x="${P[0]}" y="${P[1] + KBL_LAB_DY}" text-anchor="middle">${esc(L.text)}${L.text !== L.full ? `<title>${esc(L.full)}</title>` : ''}</text>`);
     });
     if (hasInv || forceInv) {
       KBL_ORDER.forEach((n, i) => {
         const P = KBL_XY[n], c = shade(KBL_COLORS[n] || '#94a3b8', 0.75);
         const on = !forceInv && invd.has(n);
         const actInv = on && actSet.has(n);
-        const y = 500 - P[1];
-        out.push(`<rect class="kn${on ? ' on' : ''}${actInv ? ' act' : (on ? ' idle' : '')}" data-sef="${i}" data-kind="inv" x="${P[0] - 9}" y="${y - 9}" width="18" height="18" transform="rotate(45 ${P[0]} ${y})" style="fill:${c};fill-opacity:${on ? '1' : (forceInv ? '.05' : '.14')};stroke:${c};stroke-opacity:${on ? '.95' : (forceInv ? '.16' : '.34')}"/>`);
+        const y = KBL_MIRROR - P[1];
+        out.push(`<rect class="kn${on ? ' on' : ''}${actInv ? ' act' : (on ? ' idle' : '')}${forceInv ? ' ghost' : ''}" data-sef="${i}" data-kind="inv" x="${P[0] - 9}" y="${y - 9}" width="18" height="18" transform="rotate(45 ${P[0]} ${y})" style="fill:${c};fill-opacity:${on ? '1' : (forceInv ? '.05' : '.14')};stroke:${c};stroke-opacity:${on ? '.95' : (forceInv ? '.16' : '.34')}"/>`);
         const L2 = enLabel(n, true);
-        out.push(`<text class="kb-lab inv-lab"${L2.text !== L2.full ? ` data-full="${esc(L2.full)}"` : ''} x="${P[0]}" y="${y + 24}" text-anchor="middle">${esc(L2.text)}${L2.text !== L2.full ? `<title>${esc(L2.full)}</title>` : ''}</text>`);
+        out.push(`<text class="kb-lab inv-lab${forceInv ? ' ghost' : ''}"${L2.text !== L2.full ? ` data-full="${esc(L2.full)}"` : ''} x="${P[0]}" y="${y + KBL_LAB_DY_INV}" text-anchor="middle">${esc(L2.text)}${L2.text !== L2.full ? `<title>${esc(L2.full)}</title>` : ''}</text>`);
       });
     }
     out.push('</svg>');
@@ -3016,6 +3034,7 @@
     st.stateWarns = stateWarnOf(st);
     st.paceWarns = paceWarnOf(st);
     st.cdWarns = cdStallOf(st, prev || null);
+    st.yzDrift = yzDriftOf(prev || null, st);
     const scene = seg(st.scene);
     const out = [];
     const sect = (zh, en) => `<div class="tc-sect"><i></i><b>${esc(zh)}</b><em>${en}</em></div>`;
@@ -3249,6 +3268,9 @@
     (st.cdWarns || []).forEach(function (w) {
       log.push(`<div class="tc-dmg-warn tc-cdwarn">⚠ ${esc(w)}</div>`);
     });
+    (st.yzDrift || []).forEach(function (w) {
+      log.push(`<div class="tc-dmg-warn tc-yzdrift">⚠ ${esc(w)}</div>`);
+    });
     (st.kblDrift || []).forEach(function (w) {
       log.push(`<div class="tc-dmg-warn tc-kbldrift">⚠ ${esc(w)}</div>`);
     });
@@ -3332,6 +3354,14 @@
   /* ── 只替换状态块节点，正文 DOM 完全不动。
         同一条消息里可能有多段状态行（正文隔开的 mob 块等），循环吃干净 ── */
   /* 取同一聊天里上一楼的解析结果；读不到就返回 null（= 所有跨楼检查沉默）。 */
+  /* 「上一楼」= **当前可见的、更早的那一条有状态块的消息**。
+     不是 msgIndex-1：楼层被删、跳楼、消息被截断，三种都会让下标错位，而下标错位不报错，
+     只会拿别人的数去比（与 cr2 挂到 p2 是同一类静默错）。
+     返回值两种：
+       · `null`      —— 往回找不到任何可解析的状态块。调用方必须**沉默**（判据要有「我不知道」这个出口，
+                        否则每一楼的第一次都会被报成违规）。
+       · 状态对象    —— 找到了。**空状态也是状态**（这楼只写了正文、状态块是空的），照常比，
+                        不许因为「它看起来是空的」就当成「没找到」——这两个在代码里常常长成同一个 undefined。 */
   function prevFloorOf(el) {
     let mes = null;
     try { mes = el.closest ? el.closest('.mes') : null; } catch (e) { mes = null; }
@@ -3351,6 +3381,31 @@
       sib = sib.previousElementSibling;
     }
     return null;
+  }
+
+  /* 源质池漂移守卫：只报「解 里的元名消失」。
+     依据条目 uid 31 原文「解只增不减；0=入过槽没攒下，与未解锁两件事」——
+     ① 元名从 `解` 消失 / 退回 `未` = 违规（已入槽的源质不会退回去）
+     ② **点数双向都合法**（分解攒、注入花），所以点数变化一律不报；
+        lead 早先那句「点数只减不增」是二手话，按原文不成立，这里不照抄。
+     ③ 未 → 解 = 解锁，正常，不报；首见 / 无上一楼 / 楼里没有 yz = 沉默。 */
+  function yzDriftOf(prevSt, curSt) {
+    const out = [];
+    const prev = (prevSt && prevSt.yzs) || [];
+    const cur = (curSt && curSt.yzs) || [];
+    if (!prev.length || !cur.length) return out;
+    const pm = new Map(prev.map(r => [r.n || 1, r]));
+    cur.forEach(r => {
+      const p = pm.get(r.n || 1);
+      if (!p) return;                       /* 首见：这一号之前没有基准 */
+      const curSolved = r.solved || [];
+      (p.solved || []).forEach(nm => {
+        if (curSolved.indexOf(nm) < 0) {
+          out.push(nm + ' 从 源质「解」里消失 —— 解只增不减（入过槽就不会退回去）');
+        }
+      });
+    });
+    return out;
   }
 
   function sweep() {
@@ -4717,6 +4772,7 @@ details[open]>.tc-skfl-ar::after{content:'▴'}
   } catch (e) { /* 忽略 */ }
 
   /* 仅供测试，非公开 API，可随实现变动 */
-  window.__twCard = { version: VERSION, parseState, render, sweep, keys: EXT_KEYS, extractBlock: extractBlock, extHit: extHit, CSS: CSS, injectCss: injectCss, parseShelter, parseDisaster, parseWarehouse, parsePlace, splitInlineKeys, keyHits, checkAudit, parseCr, parseKbl, parseYz, parseAck, ackOf, parsePace, paceOf, paceWarnOf, kblDriftOf, kblSnapOf, kblStep, BLOOD_KEYS: BLOOD_KEYS, bloodCapLine: bloodCapLine, bloodScale: bloodScale };
+  window.__twCard = {
+    yzDriftOf: yzDriftOf, prevFloorOf: prevFloorOf, version: VERSION, parseState, render, sweep, keys: EXT_KEYS, extractBlock: extractBlock, extHit: extHit, CSS: CSS, injectCss: injectCss, parseShelter, parseDisaster, parseWarehouse, parsePlace, splitInlineKeys, keyHits, checkAudit, parseCr, parseKbl, parseYz, parseAck, ackOf, parsePace, paceOf, paceWarnOf, kblDriftOf, kblSnapOf, kblStep, BLOOD_KEYS: BLOOD_KEYS, bloodCapLine: bloodCapLine, bloodScale: bloodScale };
   console.log('[tw-card] v' + VERSION + ' ready');
 })();
