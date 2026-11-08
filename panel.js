@@ -9,7 +9,7 @@
   if (window.__twCardLoaded) return;
   window.__twCardLoaded = true;
 
-  const VERSION = '3.43.0';
+  const VERSION = '3.44.0';
 
   /* 面板尺寸偏好：紧凑(tc-mini)/完整。localStorage 持久化，点击 .tc-size 全局切换 */
   const SIZE_KEY = 'tw-card:size';
@@ -78,7 +78,7 @@
 
   /* ══════════ 基础工具 ══════════ */
 
-  const KEYS = 'scene|team|quest|check|result|world|next|bond[0-9]*|foe[0-9]*|nb[0-9]*|nf[0-9]*|nh[0-9]*|nd[0-9]*|nl[0-9]*|npc[0-9]*|kbnpc[0-9]*|ntrnpc[0-9]*|kbm[0-9]*|kbf[0-9]*|dmg[0-9]*|sh[0-9]*|dz[0-9]*|wh[0-9]*|pl[0-9]*|lk[0-9]*|kbmsk[0-9]*|kbfsk[0-9]*|pts[0-9]+|lock[0-9]+|ti[0-9]+|cr[0-9]+|p[0-9]+|sk[0-9]+|eq[0-9]+|mob[0-9]*|kbl[0-9]*|yz[0-9]*|zw|ack|pace';
+  const KEYS = 'scene|team|quest|check|result|world|next|bond[0-9]*|foe[0-9]*|nb[0-9]*|nf[0-9]*|nh[0-9]*|nd[0-9]*|nl[0-9]*|npc[0-9]*|kbnpc[0-9]*|ntrnpc[0-9]*|kbm[0-9]*|kbf[0-9]*|dmg[0-9]*|sh[0-9]*|dz[0-9]*|wh[0-9]*|pl[0-9]*|lk[0-9]*|kbmsk[0-9]*|kbfsk[0-9]*|pts[0-9]+|lock[0-9]+|ti[0-9]+|cr[0-9]+|p[0-9]+|sk[0-9]+|eq[0-9]+|mob[0-9]*|kbl[0-9]*|yz[0-9]*|bl[0-9]*|zw|ack|pace';
   const LINE_RE = new RegExp('^[ \\t]*(' + KEYS + ')[:：][ \\t]*(.*)$', 'i');
   /* 拓展键登记表（AGENTS.md §3.1 规则 7）四列：键前缀 | base 名 | 渲染器 | 主题 class
      （派生第五列 field = 状态对象存放字段）。编号一律按「键前缀长度」取，禁字面量偏移
@@ -1372,7 +1372,7 @@
   function parseState(text) {
     const st = {
       scene: '', team: '', quest: null, checks: [],
-      players: [], npcs: [], kbnpcs: [], ntrnpcs: [], bonds: [], foes: [], mobs: [], ntrBonds: [], ntrFoes: [], ntrHearts: [], ntrFalls: [], ntrLogs: [], mechas: [], familiars: [], dmgs: [], shelters: [], disasters: [], warehouses: [], places: [], geneLocks: [], crOrphans: [], orphans: [], ack: null, pace: null, zw: null, kbls: [], yzs: [],
+      players: [], npcs: [], kbnpcs: [], ntrnpcs: [], bonds: [], foes: [], mobs: [], ntrBonds: [], ntrFoes: [], ntrHearts: [], ntrFalls: [], ntrLogs: [], mechas: [], familiars: [], dmgs: [], shelters: [], disasters: [], warehouses: [], places: [], geneLocks: [], crOrphans: [], orphans: [], ack: null, pace: null, zw: null, kbls: [], yzs: [], bls: [],
       result: '', world: '', next: '',
     };
     const pmap = new Map(), smap = new Map(), emap = new Map();
@@ -1396,6 +1396,7 @@
     const shmap = new Map(), dzmap = new Map();
     const whmap = new Map(), plmap = new Map();
     const lkmap = new Map();
+    const blmap = new Map();
     const xmap = {}; EXT_KEYS.forEach(e => { xmap[e.field] = new Map(); });
     const checks = [];
     const split = splitInlineKeys(text);
@@ -1413,6 +1414,7 @@
       else if (k === 'ack') st.ack = parseAck(v);
       else if (k === 'pace') st.pace = parsePace(v);
       else if (k === 'zw') st.zw = parseZw(v);
+      else if (/^bl\d*$/.test(k)) blmap.set(k === 'bl' ? 1 : +k.slice(2), parseBl(v));
       else if (k === 'quest') st.quest = parseQuest(v);
       else if (k === 'check') checks.push(parseCheck(v));
       else if (k === 'result') st.result = v;
@@ -1466,6 +1468,15 @@
       p.lockRow = lockm.get(i) || null;
       p.tiRow = tim.get(i) || null;
       p.crRow = crm.get(i) || null;
+      /* 档案四项：p 行尾段优先，独立行兜底（模型常只写 pts/lock/ti 行、不写 p 行尾段；
+         两个来源里只读一个，就会「档案里只剩称号」。兜底只在 p 行没有时生效，不并列显示） */
+      if (!p.pts && p.ptsRow && (p.ptsRow.total || p.ptsRow.ranks)) {
+        p.pts = p.ptsRow.total
+          ? (p.ptsRow.ranks ? p.ptsRow.total + ' ｜ ' + p.ptsRow.ranks : p.ptsRow.total)
+          : p.ptsRow.ranks;
+      }
+      if (!p.lock && p.lockRow && p.lockRow.stage) p.lock = p.lockRow.stage;
+      if (!p.title && p.tiRow && p.tiRow.cn) p.title = p.tiRow.cn;
       const seen = crSeen.get(i) || [];
       p.crDup = seen.length > 1
         ? { times: seen.length, lost: seen.slice(0, -1).reduce((a, r) => a + r.length, 0), kept: seen[seen.length - 1].length }
@@ -1480,6 +1491,24 @@
       return row;
     });
     BLOOD_KEYS.forEach(function (e) { st[e.field] = hook(bmaps[e.key]); });
+    st.bls = hook(blmap);
+    /* bl 行按同号挂到玩家身上，供「档案」里那两行用；没有就是 null */
+    /* bl 行按同号挂到玩家身上，供「档案」里那两行用。
+       派生规则（只影响显示，不改解析）：某侧 bl 没写 → 用同号 kbl/yz 各自的 阶 顶上。
+       —— 卡巴拉与源质本身就是血统/内功，注册表规定它们「不进 bl」；
+          若不做派生，一个卡巴拉 SSS 的玩家档案里会写着「血统 无」，那是错的。
+       同一信息只有一处来源：两处都有时 bl 优先，且只显示一行。 */
+    (st.players || []).forEach(function (p) {
+      const n = p.idx || 1;
+      const own = (st.bls || []).filter(function (r) { return (r.n || 1) === n; })[0] || null;
+      const kb = (st.kbls || []).filter(function (r) { return (r.n || 1) === n; })[0] || null;
+      const yz = (st.yzs || []).filter(function (r) { return (r.n || 1) === n; })[0] || null;
+      let blood = own && own.blood ? own.blood : null;
+      let nei = own && own.nei ? own.nei : null;
+      if ((!blood || blood.none) && kb && kb.stage) blood = { none: false, name: '卡巴拉', grade: kb.stage, derived: 'kbl' };
+      if ((!nei || nei.none) && yz && yz.stage) nei = { none: false, name: '源质', grade: yz.stage, derived: 'yz' };
+      p.blRow = (blood || nei) ? { n: n, blood: blood || { none: true }, nei: nei || { none: true } } : null;
+    });
     /* 独立字段是唯一出处：同号 kbl/yz 在场时，cr 里那几段不再当资源显示。
        按「同号」过滤——否则两人同场会「甲的血统吞乙的资源」。
        旧卡（没有同号 kbl/yz）原样保留，不报警：旧写法不是错。 */
@@ -2656,6 +2685,29 @@
     return o;
   }
 
+  /* ── bl：血统 / 内功 登记行（一人一行，只记「是什么等级」）──
+     契约：bl1: 血统 幸运 中阶 ｜ 内功 无
+     一律照原样显示：档位不认识的词也显示原词，不报警（§7 第 27 条：常态 ⚠ 等于没有 ⚠）。
+     与 kbl / yz 不合并、不校验互斥——有 bl 就渲染 bl，没有就不渲染这一块。 */
+  function parseBl(v) {
+    const o = { blood: null, nei: null, raw: String(v || '') };
+    String(v || '').split(/[｜|]/).map(x => x.trim()).filter(Boolean).forEach(seg => {
+      const m = seg.match(/^(血统|内功)\s*[:：]?\s*([\s\S]*)$/);
+      if (!m) return;
+      const side = m[1] === '血统' ? 'blood' : 'nei';
+      const rest = (m[2] || '').trim();
+      if (!rest || /^(无|没有|—|-|none)$/i.test(rest)) { o[side] = { none: true, name: '', grade: '' }; return; }
+      const t = rest.split(/\s+/);
+      o[side] = { none: false, name: t[0] || '', grade: t.slice(1).join(' ') };
+    });
+    return o;
+  }
+  /* 卡面用：一个侧面压成「名 等级」，缺的写 无。等级原样，不换算不校验。 */
+  function blText(o) {
+    if (!o || o.none) return '无';
+    return o.grade ? (o.name + ' ' + o.grade) : (o.name || '无');
+  }
+
   function renderZw(z) {
     if (!z) return '';
     const conc = z.conc;
@@ -2705,12 +2757,14 @@
         ${(p.crRow || []).map(r => `<span class="tc-pill cr">◈ ${esc(r.name)} <b>${esc(r.val)}</b></span>`).join('')}
       </div>${p.crDup ? `<div class="tc-crwarn">cr${p.idx} 出现 ${p.crDup.times} 次，后一条覆盖前一条（前一条的 ${p.crDup.lost} 段丢失）</div>` : ''}` : '';
 
-    const file = (p.pts || p.sub || p.blood || p.lock || p.title) ? `
+    const file = (p.pts || p.sub || p.blood || p.lock || p.title || p.blRow) ? `
       <details class="tc-fold"><summary>档案</summary>
         <div class="tc-file">
           ${p.pts ? `<div><span>💰 奖励点数</span><b>${esc(p.pts)}</b></div>` : ''}
           ${p.sub ? `<div><span>📜 支线剧情</span><b>${esc(p.sub)}</b></div>` : ''}
           ${p.blood ? `<div><span>🧬 已兑换</span><b>${esc(p.blood)}</b></div>` : ''}
+          ${p.blRow ? `<div><span>🧬 血统</span><b>${esc(blText(p.blRow.blood))}</b></div>
+          <div><span>🧬 内功</span><b>${esc(blText(p.blRow.nei))}</b></div>` : ''}
           ${p.lock ? `<div><span>🔓 基因锁</span><b>${esc(p.lock)}</b></div>` : ''}
           ${p.title ? `<div><span>🏆 称号</span><b>${esc(p.title)}</b></div>` : ''}
         </div>
@@ -5032,6 +5086,6 @@ details[open]>.tc-skfl-ar::after{content:'▴'}
 
   /* 仅供测试，非公开 API，可随实现变动 */
   window.__twCard = {
-    yzDriftOf: yzDriftOf, prevFloorOf: prevFloorOf, version: VERSION, parseState, render, sweep, keys: EXT_KEYS, extractBlock: extractBlock, extHit: extHit, CSS: CSS, injectCss: injectCss, parseShelter, parseDisaster, parseWarehouse, parsePlace, splitInlineKeys, keyHits, checkAudit, parseCr, parseKbl, parseYz, parseZw, parseAck, ackOf, parsePace, paceOf, paceWarnOf, kblDriftOf, kblSnapOf, kblStep, BLOOD_KEYS: BLOOD_KEYS, bloodCapLine: bloodCapLine, bloodScale: bloodScale };
+    yzDriftOf: yzDriftOf, prevFloorOf: prevFloorOf, version: VERSION, parseState, render, sweep, keys: EXT_KEYS, extractBlock: extractBlock, extHit: extHit, CSS: CSS, injectCss: injectCss, parseShelter, parseDisaster, parseWarehouse, parsePlace, splitInlineKeys, keyHits, checkAudit, parseCr, parseKbl, parseYz, parseZw, parseBl, blText, parseAck, ackOf, parsePace, paceOf, paceWarnOf, kblDriftOf, kblSnapOf, kblStep, BLOOD_KEYS: BLOOD_KEYS, bloodCapLine: bloodCapLine, bloodScale: bloodScale };
   console.log('[tw-card] v' + VERSION + ' ready');
 })();
