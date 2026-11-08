@@ -9,7 +9,7 @@
   if (window.__twCardLoaded) return;
   window.__twCardLoaded = true;
 
-  const VERSION = '3.45.0';
+  const VERSION = '3.46.0';
 
   /* 面板尺寸偏好：紧凑(tc-mini)/完整。localStorage 持久化，点击 .tc-size 全局切换 */
   const SIZE_KEY = 'tw-card:size';
@@ -3630,6 +3630,19 @@
       });
     };
     chk('kbls', 'kbl'); chk('yzs', 'yz'); chk('bls', 'bl');
+    /* 无编号键：ack（认可度 R，只在幕间变）与 pace（相位/轮/张/喘，场内累计）。
+       这两个与 zw 不是一类——zw 是场地属性，进新副本就该重算，跨楼比会误报；
+       而 ack/pace 上一楼有、这一楼没有就是真丢了，不是重算。
+       `pace` 的「域 片内 → 主神」切换不是缺行（那是「有行、值变了」），缺行永远不是合法状态。
+       注意：这两条与「默认值渲染」并存，不互相顶掉——卡面照样出默认值 + 默认标记，
+       玩家还能玩；黄字只是告诉他「这个值是旧值/默认值」，不是真值。 */
+    const chkKey = function (key, label, hint) {
+      if (!prevSt[key]) return;
+      if (curSt[key]) return;
+      out.push('本轮缺 ' + label + ' 行（上一楼有）—— ' + hint);
+    };
+    chkKey('ack', 'ack', '若确实无认可度体系，在 world 写明');
+    chkKey('pace', 'pace', '若本场没有节奏体系，在 world 写明');
     return out;
   }
 
