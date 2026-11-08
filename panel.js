@@ -9,7 +9,7 @@
   if (window.__twCardLoaded) return;
   window.__twCardLoaded = true;
 
-  const VERSION = '3.44.0';
+  const VERSION = '3.45.0';
 
   /* 面板尺寸偏好：紧凑(tc-mini)/完整。localStorage 持久化，点击 .tc-size 全局切换 */
   const SIZE_KEY = 'tw-card:size';
@@ -3219,6 +3219,7 @@
     st.paceWarns = paceWarnOf(st);
     st.cdWarns = cdStallOf(st, prev || null);
     st.yzDrift = yzDriftOf(prev || null, st);
+    st.missRows = missingRowsOf(prev || null, st);
     const scene = seg(st.scene);
     const out = [];
     const sect = (zh, en) => `<div class="tc-sect"><i></i><b>${esc(zh)}</b><em>${en}</em></div>`;
@@ -3462,6 +3463,11 @@
     (st.kblDrift || []).forEach(function (w) {
       log.push(`<div class="tc-dmg-warn tc-kbldrift">⚠ ${esc(w)}</div>`);
     });
+    if ((st.missRows || []).length) {
+      log.push('<div class="tc-crwarn tc-missrow">' + st.missRows.map(function (w) {
+        return '<span class="tc-crwarn-line">⚠ ' + esc(w) + '</span>';
+      }).join('') + '</div>');
+    }
     (st.weakWarns || []).forEach(function (w) {
       const txt = w.why === 'hidden'
         ? `弱点未暴露却算进了加成：${esc(w.mob)} 的弱点还没识破（判「${esc(w.verdict || '—')}」）`
@@ -3593,6 +3599,37 @@
         }
       });
     });
+    return out;
+  }
+
+  /* 整行消失守卫（v3.45.0）：同号键 kbl<N> / yz<N> / bl<N> 经常整行不生成。
+     漂移守卫查的是「行还在、名字少了」，行整个不在时它没有比较对象，所以这里单独查一层。
+     只查**同号键**：它们与 p<N> 对齐，跨楼比「同号上一楼有没有」是有意义的。
+     **团队级无编号键（zw / ack / pace）不查**——跨楼比会把「进新场 / 离场」判成漂移，
+     每进一个新副本就黄一次，很快玩家就学会无视黄字。zw 的兜底是世界书那条「出现过就要续」。
+     边界：
+       · 上一楼也没有该号 → 不报（这玩家本来就没这套体系）
+       · 本场第一楼（prev 为 null）→ 不报
+       · prevFloorOf 拿不到 → 沉默（沿用既有语义）
+     措辞按「上一楼有、这一楼没有」写，不写「错误」——血统被剥离是合法失去，
+     那种情况模型会在 world 写缘由；写成「错误」玩家只会以为面板坏了。
+     报了就是报了，不做任何渲染补救：缺行就是缺行，不补空卡、不补「无」。 */
+  function missingRowsOf(prevSt, curSt) {
+    const out = [];
+    if (!prevSt) return out;
+    const chk = function (key, label) {
+      const prev = prevSt[key] || [];
+      const cur = curSt[key] || [];
+      if (!prev.length) return;
+      const seen = new Set(cur.map(function (r) { return r.n || 1; }));
+      prev.forEach(function (r) {
+        const n = r.n || 1;
+        if (!seen.has(n)) {
+          out.push('本轮缺 ' + label + n + ' 行（上一楼有）—— 若确实失去这套体系，在 world 写明');
+        }
+      });
+    };
+    chk('kbls', 'kbl'); chk('yzs', 'yz'); chk('bls', 'bl');
     return out;
   }
 
@@ -5086,6 +5123,6 @@ details[open]>.tc-skfl-ar::after{content:'▴'}
 
   /* 仅供测试，非公开 API，可随实现变动 */
   window.__twCard = {
-    yzDriftOf: yzDriftOf, prevFloorOf: prevFloorOf, version: VERSION, parseState, render, sweep, keys: EXT_KEYS, extractBlock: extractBlock, extHit: extHit, CSS: CSS, injectCss: injectCss, parseShelter, parseDisaster, parseWarehouse, parsePlace, splitInlineKeys, keyHits, checkAudit, parseCr, parseKbl, parseYz, parseZw, parseBl, blText, parseAck, ackOf, parsePace, paceOf, paceWarnOf, kblDriftOf, kblSnapOf, kblStep, BLOOD_KEYS: BLOOD_KEYS, bloodCapLine: bloodCapLine, bloodScale: bloodScale };
+    yzDriftOf: yzDriftOf, prevFloorOf: prevFloorOf, version: VERSION, parseState, render, sweep, keys: EXT_KEYS, extractBlock: extractBlock, extHit: extHit, CSS: CSS, injectCss: injectCss, parseShelter, parseDisaster, parseWarehouse, parsePlace, splitInlineKeys, keyHits, checkAudit, parseCr, parseKbl, parseYz, parseZw, parseBl, blText, parseAck, ackOf, parsePace, paceOf, paceWarnOf, kblDriftOf, kblSnapOf, kblStep, missingRowsOf, BLOOD_KEYS: BLOOD_KEYS, bloodCapLine: bloodCapLine, bloodScale: bloodScale };
   console.log('[tw-card] v' + VERSION + ' ready');
 })();
