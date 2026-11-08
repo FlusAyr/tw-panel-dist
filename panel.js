@@ -9,7 +9,7 @@
   if (window.__twCardLoaded) return;
   window.__twCardLoaded = true;
 
-  const VERSION = '3.39.0';
+  const VERSION = '3.40.0';
 
   /* 面板尺寸偏好：紧凑(tc-mini)/完整。localStorage 持久化，点击 .tc-size 全局切换 */
   const SIZE_KEY = 'tw-card:size';
@@ -153,9 +153,11 @@
         <summary><em class="tc-skfl-t">技能</em><b class="tc-skfl-n">${count}/${cap}${over ? ' ⚠' : ''}</b><i class="tc-skfl-pips">${skillPips(count, cap)}</i><span class="tc-skfl-ar"></span></summary>
         ${over ? skillOver(count, '技能', cap) : ''}
         <div class="tc-skills">${items.map(sk => `
-          <div class="tc-skill">
+          <div class="tc-skill${sk.cdCur > 0 ? ' cd-cool' : ''}"${sk.cdMax != null ? ` data-cd="${sk.cdCur || 0}/${sk.cdMax}"` : ''}>
             <b>${esc(sk.name)}</b>
-            <em>${sk.cd ? 'CD ' + esc(sk.cd) : (sk.sp ? '被动' : '')}${sk.sp ? ' · SP ' + esc(sk.sp) : ''}</em>
+            <em>${(sk.cdCur > 0) ? `<i class="tc-cd-rest">⌛ ${sk.cdCur}</i> · ` : ''}${sk.cdMax != null
+              ? 'CD ' + (sk.cdCur || 0) + '/' + sk.cdMax
+              : (sk.cd ? 'CD ' + esc(sk.cd) : (sk.sp ? '被动' : ''))}${sk.sp ? ' · SP ' + esc(sk.sp) : ''}</em>
             <span>${esc(sk.effect || '')}</span>${sk.formula ? `<u class="tc-sk-formula">${esc(sk.formula)}</u>` : ''}
           </div>`).join('')}</div>
       </details>`;
@@ -739,14 +741,25 @@
         const rest = [];
         for (let i = 1; i < segs.length; i++) {
           const t = segs[i];
-          const cdm = t.match(/(?:CD|冷却)[\s:：]*([^\s｜|/]+)/i);
+          /* CD 允许双值 `2/3`（剩余/上限），所以第一分支要先吃掉带半角斜线的形态；
+             全角 `／` 不认——它落进第二分支整体成为 raw（与负重同行为，不猜半边）。 */
+          const cdm = t.match(/(?:CD|冷却)[\s:：]*([0-9]+\s*\/\s*[0-9]+|[^\s｜|]+)/i);
           const spm = t.match(/SP[\s:：]*([^\s｜|/]+)/i);
           /* `式` 段：效果公式（`2D12+STR/10`），原文照收。
              **可有可无**：缺了就是空串，不报错、不出 ⚠ —— 存量卡不能因为少一项突然全黄。 */
           const fmm = t.match(/^式\s*[:：]?\s*(.*)$/);
           let used = false;
           if (fmm && !o.formula) { o.formula = fmm[1].trim(); used = true; }
-          if (cdm && !o.cd) { o.cd = cdm[1]; used = true; }
+          if (cdm && !o.cd) {
+            o.cd = cdm[1].replace(/\s+/g, '');
+            /* 双值 = 剩余/上限。单值 = 旧卡，按 `0/上限` 读（剩余 0 = 可用）——
+               **不引入第三种形态**：`—` 只多传达「我不知道」，却多出一个人要判的分支，
+               而这里「剩余 0」与「可用」本来就等价。0 条黄字：规则升级不该让存量卡一屏警告。 */
+            const cm = o.cd.match(/^([0-9]+)\/([0-9]+)$/);
+            if (cm) { o.cdCur = +cm[1]; o.cdMax = +cm[2]; }
+            else if (/^[0-9]+$/.test(o.cd)) { o.cdCur = 0; o.cdMax = +o.cd; }
+            used = true;
+          }
           if (spm && !o.sp) { o.sp = spm[1]; used = true; }
           if (used) continue;
           rest.push(t);
@@ -1876,6 +1889,12 @@
       if ((m = x.match(/^(?:轮|round)\s*[:：]?\s*(\d+)\s*(?:\/\s*\d+)?$/i))) { o.round = +m[1]; continue; }
       if ((m = x.match(/^(?:张|张力|tension)\s*[:：]?\s*(\d+)\s*(?:\/\s*\d+)?$/i))) { o.tension = +m[1]; continue; }
       if ((m = x.match(/^(?:喘|喘息|rest)\s*[:：]?\s*(\d+)$/i))) { o.rests = +m[1]; continue; }
+      /* 域：`主神` = 主神空间（不在片里，节奏不计时）/ `片内` = 副本里（正常推进）。
+         不写按 `片内`——旧卡默认就在副本里推进，这条只影响新写法与重置判定。 */
+      if ((m = x.match(/^(?:域|dom(?:ain)?)\s*[:：]?\s*([^\s｜|]+)$/i))) {
+        if (/^(主神|片内)$/.test(m[1])) { o.domain = m[1]; } else { o.errs.push('域只认 主神/片内：' + m[1]); }
+        continue;
+      }
       if (/^[^\s]+$/.test(x) && PACE_PHASES.indexOf(x) >= 0) { o.phase = x; continue; }
     }
     if (o.phase && PACE_PHASES.indexOf(o.phase) < 0) o.errs.push('相位只认 ' + PACE_PHASES.join('/') + '：' + o.phase);
@@ -1891,12 +1910,20 @@
     const round = src.round == null ? PACE_DEFAULT.round : Math.max(0, Math.round(src.round));
     const tension = src.tension == null ? PACE_DEFAULT.tension : Math.min(10, Math.max(0, Math.round(src.tension)));
     const rests = src.rests == null ? PACE_DEFAULT.rests : Math.max(0, Math.round(src.rests));
-    return { present: present, phase: phase, budget: budget, round: round, over: round > budget, tension: tension, rests: rests, errs: (src.errs || []) };
+    /* 域 主神：主神空间里没有「第几轮」「张力」这回事，硬按恐怖片节奏走会让卡面一直在催。
+       这里把相位按 `喘息` 显示、轮/张不计、超轮不报——**不是把数据抹掉，是换个说法**。 */
+    const domain = src.domain === '主神' ? '主神' : '片内';
+    const stopped = domain === '主神';
+    return { present: present, isDefault: !present, domain: domain, stopped: stopped,
+      phase: stopped ? '喘息' : phase, budget: stopped ? 0 : budget,
+      round: stopped ? 0 : round, over: stopped ? false : (round > budget),
+      tension: tension, rests: rests, errs: (src.errs || []) };
   }
   function paceWarnOf(st) {
     const out = [];
     const p = paceOf(st);
     if (!p.present) return out;
+    if (p.stopped) return out;      /* 主神空间不在片里，没有「本场」可判 */
     if (p.over) out.push('相位超轮：' + p.phase + ' 已第 ' + p.round + ' 轮，预算 ' + p.budget + ' —— 该推进到高潮或收束');
     const res = String((st && st.result) || '') + ' ' + String((st && st.world) || '');
     if (p.phase === '收束' || /(任务完成|本场结束|收尾|撤离完毕)/.test(res)) {
@@ -1919,6 +1946,7 @@
     const trail = String((a && a.trailRaw) || '')
       .split(/[\u2192>→,，\s]+/).map(t => t.trim()).filter(t => /^\d+$/.test(t)).slice(-3);
     return {
+      isDefault: !(a && a.rRaw != null),
       R: R,
       tier: tier,
       enemy: Math.round((1.05 + 0.03 * R) * 100) / 100,
@@ -1993,7 +2021,11 @@
     return { text: ab, full };
   };
   const DAAT_XY = [160, 96];              /* 中柱虚空：智慧/理解 与 美 之间 */
-  const nameList = (s) => String(s || '').split(/[\s、,，·]+/).filter(Boolean);
+  /* 名单里的占位符：契约规定「没东西就写 无」，所以它必须折成空数组再往后走。
+     不折的话它会当成一个名字 → 未识别黄字 + 参与计数（`用` 从 1 变 2）。
+     一个每次都会出现的警告等于训练玩家无视黄字（§7 第 27 条）。 */
+  const NAME_PLACEHOLDER = /^(无|没有|空|—|–|-|none|null)$/i;
+  const nameList = (s) => String(s || '').split(/[\s、,，·]+/).filter(Boolean).filter(x => !NAME_PLACEHOLDER.test(x));
   const shade = (hex, f) => {
     const n = parseInt(String(hex).replace('#', ''), 16);
     const r = Math.round(((n >> 16) & 255) * f), g = Math.round(((n >> 8) & 255) * f), b = Math.round((n & 255) * f);
@@ -2019,6 +2051,27 @@
     const t = String(n || '').trim();
     return KBL_EN2CN[t] || KBL_EN2CN[t.replace(/'/g, '')] || t;
   };
+
+  /* 质点只有「已吞」「未吞」两态，没有投影/借用/虚影第三态（AGENTS §3.1 kbl 行）。
+     `王冠(虚)` 这类写法是模型自己造出来的，一律走「未识别名称」通道：
+     照原样显示、不计入 解/逆/激 任何计数、不为它新开样式档位。
+     给它单开一档等于把「模型编了个东西」写成渲染器支持的能力。 */
+  /* 解析上限（uid 30 口径，与 `用 N/20` 同构：分母由面板算，玩家只写剩余）：
+       阶基础 D2 / C3 / B3 / A4 / S5
+       天平偏斜：+3~+5 → +1 ｜ +6~+8 → +2 ｜ +9~+10 → +3（**负侧不加**）
+       解里含「理解」+2（该质点的权限是「解析扩容」）
+     **一次性效果（恩典 / 借贷）不进分母**：上限只由状态决定，不由宣告决定 ——
+     它一进上限，面板就得算一个只有玩家自己知道的分母，又回到「两个来源对不上」。 */
+  const KBL_PARSE_BASE = { D: 2, C: 3, B: 3, A: 4, S: 5 };
+  function parseCapOf(stage, scale, solved) {
+    const t = String(stage || '').toUpperCase();
+    const key = ['SSS', 'SS', 'S', 'A', 'B', 'C', 'D'].find(x => t.indexOf(x) >= 0) || 'C';
+    const base = (key === 'SS' || key === 'SSS') ? 5 : (KBL_PARSE_BASE[key] != null ? KBL_PARSE_BASE[key] : 3);
+    const pos = (typeof scale === 'number' && scale > 0) ? scale : 0;   /* 负侧不加 */
+    const tilt = pos >= 9 ? 3 : (pos >= 6 ? 2 : (pos >= 3 ? 1 : 0));
+    const und = (solved || []).indexOf('理解') >= 0 ? 2 : 0;
+    return base + tilt + und;
+  }
 
   /* ── 血统 / 内功：自带结构化状态一律自建键行，不进 cr ──
      加一套新体系 = 这里加一行 + 写一个 render + 一组 CSS 变量；解析分派、截断锁、挂载主干都不用改。
@@ -2049,7 +2102,7 @@
   }
 
   function parseKbl(v) {
-    const o = { tree: '', stage: '', solved: [], inversed: [], usedRaw: '', bad: [], unknown: [], errs: [], warns: [], actRaw: '', hasScale: false, scale: null, hasParse: false, parsed: null, raw: String(v || '') };
+    const o = { tree: '', stage: '', solved: [], inversed: [], usedRaw: '', bad: [], unknown: [], errs: [], warns: [], actRaw: '', hasScale: false, scale: null, hasParse: false, parsed: null, parsedWroteCap: null, raw: String(v || '') };
     String(v || '').split(/[｜|]/).map(x => x.trim()).filter(Boolean).forEach(seg => {
       const m = seg.match(/^([^\s:：]{1,6})\s*[:：]?\s*([\s\S]*)$/);
       if (!m) return;
@@ -2078,20 +2131,24 @@
         }
       }
       else if (k === '析') {
-        const mm = String(val).match(/^(\d+)\s*\/\s*(\d+)$/);
-        if (!mm) o.errs.push('析 只认 a/b：' + val);
+        /* 只写剩余：`析 0`。旧写法 `析 0/1` 照旧读出 n，但**分母一律由面板算**（写什么都不采信），
+           也不报警——旧卡不是错。分母在段循环之后算（`阶`/`天`/`解` 都可能写在它后面）。 */
+        const mm = String(val).match(/^(\d+)(?:\s*\/\s*(\d+))?$/);
+        if (!mm) o.errs.push('析 只认「析 剩余」或旧写法「析 剩余/上限」：' + val);
         else {
           o.hasParse = true;
-          o.parsed = { n: +mm[1], cap: +mm[2] };
-          /* 上限不由面板猜（上限在平衡六档）：只校验 a ≤ b，其余照模型显示 */
-          if (+mm[1] > +mm[2]) o.warns.push('解析超次数：析 ' + val + ' —— 超出 ' + (+mm[1] - +mm[2]) + ' 次');
+          o.parsed = { n: +mm[1], cap: null };
+          o.parsedWroteCap = mm[2] == null ? null : +mm[2];
         }
       }
       else o.unknown.push(seg);
     });
-    /* 名字写错：照原样显示 + 黄字，不落 errs（用户可能自创体系） */
+    /* 名字写错：照原样显示 + 黄字，不落 errs（用户可能自创体系）。
+       **认不出来的名字不计入任何计数** —— `用` 数的是「真的吞了几个质点」，
+       把 `王冠(虚)` 算进去会让这个数字变成「模型写了几个词」。 */
     const seen = new Set();
-    o.solved.concat(o.inversed).forEach(n => { if (KBL_ORDER.indexOf(n) < 0) seen.add(n); });
+    o.solved = o.solved.filter(n => { if (KBL_ORDER.indexOf(n) < 0) { seen.add(n); return false; } return true; });
+    o.inversed = o.inversed.filter(n => { if (KBL_ORDER.indexOf(n) < 0) { seen.add(n); return false; } return true; });
     o.bad = [...seen];
     const uniq = new Set(o.solved.concat(o.inversed));
     o.used = uniq.size;
@@ -2117,6 +2174,14 @@
           o.errs.push('激 只认「激 N/M 名单」或「激 ∞」：' + raw);
         }
       }
+      /* `act` 与 `actList` 说两件不同的事：
+         `act`     = 激 名单里**认得出来**的那些 —— 卡面 `激 N/M` 数的是这个（玩家看到「我激活了几个」）
+         `actList` = 其中真正在生效的（须同时出现在 解 或 逆 里）
+         认不出来的（`王冠(虚)` 之类）在这里就被摘出去送进未识别名单：
+         它们既不算「激活了」，也不该让面板去问「你吞过它吗」——前提就不成立。 */
+      const unkInAct = o.act.filter(n => KBL_ORDER.indexOf(n) < 0);
+      o.act = o.act.filter(n => KBL_ORDER.indexOf(n) >= 0);
+      unkInAct.forEach(n => { if (o.bad.indexOf(n) < 0) o.bad.push(n); });
       /* 三条黄字：只解释，不改写法、不改解析结果 */
       if (!o.actInf && isFinite(o.actCap) && o.actN > o.actCap) {
         o.warns.push('激活数超槽：激 ' + o.actN + '/' + o.actCap + ' —— 超出 ' + (o.actN - o.actCap) + ' 个不生效');
@@ -2128,6 +2193,11 @@
       if (o.actInf && o.act.length) {
         o.warns.push('阶 ' + (o.stage || 'SSS') + ' 的激 只写 ∞，名单已融合（写了不生效）');
       }
+    }
+    /* `析` 的分母在这里算：阶/天/解 都在上面齐了。写死「析 0/1」的旧卡也走这条路。 */
+    if (o.hasParse && o.parsed) {
+      o.parsed.cap = parseCapOf(o.stage, o.scale, o.solved);
+      if (o.parsed.n > o.parsed.cap) o.warns.push('析 剩余 ' + o.parsed.n + ' 超过上限 ' + o.parsed.cap);
     }
     /* 实际生效清单：只认「既在解/逆里、又在槽内」的；SSS 融合后就是全部 */
     const ownedAct = o.act.filter(n => uniq.has(n));
@@ -2386,7 +2456,11 @@
     const dot = (n) => {
       const q = YZ_POS[n] || [50, 50], c = YZ_COLORS[n] || '#94a3b8';
       const isOn = on.has(n);
-      return `<div class="yz-n${isOn ? ' on' : ''}" style="left:${q[0]}%;top:${q[1]}%;--yzn:${c}" data-pts="${esc(ptsTxt(n))}">` +
+      /* YZ_POS 是参数空间的方向表（六个方向均布）；节点盒子有高度（方块 + 下面一行点数），
+         7% / 93% 两端会被容器裁掉。所以显示时向中心收 0.84，等价于给上下各留半个盒子。
+         **收的是显示位置，不是坐标表** —— 六个方向的相对关系不变。 */
+      const tp = 50 + (q[1] - 50) * 0.84;
+      return `<div class="yz-n${isOn ? ' on' : ''}" style="left:${q[0]}%;top:${tp.toFixed(2)}%;--yzn:${c}" data-pts="${esc(ptsTxt(n))}">` +
         `<b>${esc(n)}</b><em>${esc(ptsTxt(n))}</em></div>`;
     };
     const cls = `tc-yz grade-${grade} ${open ? 'open' : 'closed'}${ss ? ' dual' : ''}${sss ? ' full' : ''}`;
@@ -2847,12 +2921,48 @@
     </div>`;
   }
 
-  function render(st) {
+  /* ── CD 未递减（宽容检查，v3.40.0）──
+     只读两类事实：同名技能的剩余值、两楼 scene 是否同一场。任一缺失就沉默：
+     读不到上一楼 / 技能改名 / 切场 / 剩余是「—」/ 有一方已冷却完 —— 都不报。
+     误报一次，玩家就学会无视黄字（§7.27），所以这里的默认是「判不出来就别判」。 */
+  function flatSkillsOf(st) {
+    const out = [];
+    const push = (list) => (list || []).forEach(s => { if (s && s.name && s.cdMax != null) out.push(s); });
+    (st.players || []).forEach(p => push(p.skills));
+    (st.mechas || []).forEach(m => push(m.skillsNew));
+    (st.familiars || []).forEach(f => push(f.skillsNew));
+    return out;
+  }
+  function cdStallOf(cur, prev) {
+    const out = [];
+    if (!cur || !prev) return out;
+    const cs = String(cur.scene || '').trim(), ps = String(prev.scene || '').trim();
+    if (!cs || !ps || cs !== ps) return out;                 /* 切场 / 读不到场 → 沉默 */
+    /* 「上一楼」得真的是上一轮：`pace.轮` 差 1 才认。两楼写同一个轮号 = 同一轮的补写/重渲染，
+       那一轮本来就不该递减；差 2 以上说明中间隔了楼（跳读/删楼），同理不判。
+       任一楼没有 pace 行（旧卡、非跑团）时退回只靠 scene —— 那是唯一还有的信息。 */
+    const cpc = paceOf(cur), ppc = paceOf(prev);
+    if (cpc.present && ppc.present && (cpc.round - ppc.round) !== 1) return out;
+    const pm = {};
+    flatSkillsOf(prev).forEach(s => { pm[s.name] = s.cdCur; });
+    flatSkillsOf(cur).forEach(s => {
+      if (!(s.name in pm)) return;                           /* 上一楼没这名 → 新建/改名，沉默 */
+      const a = s.cdCur, b = pm[s.name];
+      if (a == null || b == null) return;                    /* 旧卡单值（—/N）→ 沉默 */
+      if (!(a > 0) || !(b > 0)) return;                      /* 任一方已冷却完 → 沉默 */
+      if (a !== b) return;                                   /* 递减了 = 正常 */
+      out.push(s.name + ' CD 未递减（两楼都是 ' + a + '/' + s.cdMax + '）——冷却每轮应 −1');
+    });
+    return out;
+  }
+
+  function render(st, prev) {
     /* 死核对账（v3.31.0）：结果/世界文字说了「没了」，但敌人 HP 还 > 0。 */
     st.killWarn = killWarnOf(st);
     st.weakWarns = weakWarnOf(st);
     st.stateWarns = stateWarnOf(st);
     st.paceWarns = paceWarnOf(st);
+    st.cdWarns = cdStallOf(st, prev || null);
     const scene = seg(st.scene);
     const out = [];
     const sect = (zh, en) => `<div class="tc-sect"><i></i><b>${esc(zh)}</b><em>${en}</em></div>`;
@@ -2878,14 +2988,22 @@
        但卡面一个元素都不出 —— 与 kbl/yz 的「无段不渲染」在这一点上是一致的，
        差别只在于「缺行时 ack 有语义、kbl/yz 没有」：前者是全局难度系数，
        后者是某个玩家的血统，没写就是没有。 */
+    /* 「本场已开始」判据：有 quest，或上一楼已经出现过 ack/pace。
+       缺行时的 `默认` 标记只在已开始后画 —— 一张孤零零的旧卡不该凭空多两块，
+       而「已经在跑却漏写」才是玩家需要被提醒的那一刻。 */
+    const paceStarted = !!(st.quest) || !!(prev && (prev.ack || prev.pace));
     {
       const ak = ackOf(st);
-      if (ak.present) {
+      /* 缺行也画：`ack` 是全局难度系数，默认值 R=3 是真的在生效的。
+         画出来 + 标「默认」，玩家一眼能分出「模型写了 3」和「模型没写、按 3 算」。
+         以前这两种长得一模一样，只有翻原文才知道漏了（§7 27：常态出现的提示不是提示）。 */
+      if (ak.present || paceStarted) {
         const cells = Array.from({ length: 10 }, (_, i) => '<i class="' + (i < ak.R ? 'on' : '') + '"></i>').join('');
         const trailTxt = ak.trail.join(' \u2192 ');
         out.push(`<div class="tc-ack tc-ack-${esc(ak.tier)}" data-ack="${ak.R}" data-tier="${esc(ak.tier)}" data-enemy="${ak.enemy}" data-gain="${ak.gain}" data-dc="${ak.dc}">` +
           `<div class="tc-ack-hd"><b>\u25c6 \u4e3b\u795e\u8ba4\u53ef\u5ea6</b><i>ACKNOWLEDGMENT</i></div>` +
-          `<div class="tc-ack-r"><b>R ${ak.R}</b><i class="tc-ack-tier">${esc(ak.tier)}</i></div>` +
+          `<div class="tc-ack-r"><b>R ${ak.R}</b><i class="tc-ack-tier">${esc(ak.tier)}</i>` +
+            (ak.isDefault ? '<i class="tc-ack-def">默认</i>' : '') + `</div>` +
           `<div class="tc-ack-bar">${cells}</div>` +
           `<div class="tc-ack-kx"><span>\u654c \u00d7${ak.enemy}</span><span>DC ${ak.dc >= 0 ? '+' : ''}${ak.dc}</span><span>\u6536\u76ca \u00d7${ak.gain}</span></div>` +
           (trailTxt || ak.reason
@@ -2897,13 +3015,44 @@
           `</div>`);
       }
     }
+    let paceReset = '';
+    let paceRestTotal = 0;
     {
       const pc = paceOf(st);
-      if (pc.present) {
-        const cells = Array.from({ length: 10 }, (_, i) => '<i class="' + (i < pc.tension ? 'on' : '') + '"></i>').join('');
+      const pp = prev ? paceOf(prev) : null;
+      /* 进片 / 出片各自重置一次：判据是 `域` 相对上一楼变了（模型只在换场景那一楼改它）。
+         重置就是回到基线 建置/0/3/张3/喘0，并在卡面留一枚 `↻ 已重置` —— 不写这枚，
+         「重置了」和「模型本来就写了 0」在卡面上又长成一样。 */
+      const showPace = pc.present || paceStarted;
+      const resetIn = showPace && !!(pp && pp.domain === '主神' && pc.domain === '片内');
+      const resetOut = showPace && !!(pp && pp.domain === '片内' && pc.domain === '主神');
+      if (resetIn) { pc.phase = PACE_DEFAULT.phase; pc.budget = PACE_BUDGET[pc.phase]; pc.round = 0; pc.tension = PACE_DEFAULT.tension; pc.rests = 0; pc.over = false; paceReset = '<i class="tc-pace-reset">↻ 进片重置</i>'; }
+      if (resetOut) { paceRestTotal = (pp.rests || 0) + (pc.rests || 0); pc.rests = 0; paceReset = '<i class="tc-pace-reset">↻ 出片重置</i>'; }
+      const cells = Array.from({ length: 10 }, (_, i) => '<i class="' + (i < pc.tension ? 'on' : '') + '"></i>').join('');
+      const defChip = pc.isDefault ? '<i class="tc-pace-def">默认</i>' : '';
+      /* 「轮 = 回复轮次」「场 = 一场恐怖片」：卡面必须让人一眼分出哪个数是本轮的、
+         哪个是整场的。喘息前面写「本场」，张力写成 N/10 而不是光一个数。 */
+      if (!showPace) { /* 旧卡且本场未开始：不画 */ }
+      else if (pc.stopped) {
+        out.push('<span class="tc-pace tc-pace-喘息">◇ 喘息 · 不计时' +
+          (paceRestTotal ? ' · 累计喘息 ' + paceRestTotal : '') + defChip + paceReset + '</span>');
+      } else {
         out.push('<span class="tc-pace tc-pace-' + pc.phase + '">◇ ' + pc.phase + ' · 第 <b class="' + (pc.over ? 'over' : '') + '">' + pc.round + '/' + pc.budget + '</b> 轮' +
-          (pc.over ? '<em class="tc-pace-flag">⚠</em>' : '') + ' · 张力 <span class="tc-pace-bar">' + cells + '</span> ' + pc.tension + ' · 喘息 ' + pc.rests + '</span>');
+          (pc.over ? '<em class="tc-pace-flag">⚠</em>' : '') + ' · 张力 <span class="tc-pace-bar">' + cells + '</span> ' + pc.tension + '/10 · 本场喘息 ' + pc.rests + defChip + paceReset + '</span>');
       }
+    }
+    /* 「缺行」只在**本场已开始之后**报：有 quest，或上一楼已经出现过 ack/pace。
+       不加这条，第一楼必报 → 黄字变成背景 → 玩家学会无视（§7 27）。
+       这条的判据不是「有没有写」，是「写了没写会不会被看见」：卡面那枚 `默认` 标记管前者，黄字管后者。 */
+    {
+      st.missWarns = [];
+      if (paceStarted) {
+        if (!ackOf(st).present) st.missWarns.push('本轮缺 `ack` 行 —— 按 R=3 显示（默认）');
+        if (!paceOf(st).present) st.missWarns.push('本轮缺 `pace` 行 —— 按 建置/0/3/3/0 显示（默认）');
+      }
+    }
+    if ((st.missWarns || []).length) {
+      out.push('<div class="tc-crwarn tc-misswarn">' + st.missWarns.map(w => '<span class="tc-crwarn-line">⚠ ' + esc(w) + '</span>').join('') + '</div>');
     }
     if ((st.paceWarns || []).length) {
       out.push('<div class="tc-crwarn tc-pacewarn">' + st.paceWarns.map(w => '<span class="tc-crwarn-line">⚠ ' + esc(w) + '</span>').join('') + '</div>');
@@ -3044,6 +3193,9 @@
           : `HP 还剩 ${hpTxt}（${w.pct == null ? '?' : w.pct + '%'}），却标了已击破`);
       log.push(`<div class="tc-dmg-warn tc-statewarn">⚠ ${txt}</div>`);
     });
+    (st.cdWarns || []).forEach(function (w) {
+      log.push(`<div class="tc-dmg-warn tc-cdwarn">⚠ ${esc(w)}</div>`);
+    });
     (st.weakWarns || []).forEach(function (w) {
       const txt = w.why === 'hidden'
         ? `弱点未暴露却算进了加成：${esc(w.mob)} 的弱点还没识破（判「${esc(w.verdict || '—')}」）`
@@ -3123,6 +3275,28 @@
 
   /* ── 只替换状态块节点，正文 DOM 完全不动。
         同一条消息里可能有多段状态行（正文隔开的 mob 块等），循环吃干净 ── */
+  /* 取同一聊天里上一楼的解析结果；读不到就返回 null（= 所有跨楼检查沉默）。 */
+  function prevFloorOf(el) {
+    let mes = null;
+    try { mes = el.closest ? el.closest('.mes') : null; } catch (e) { mes = null; }
+    let sib = mes && mes.previousElementSibling;
+    let guard = 0;
+    while (sib && guard++ < 12) {
+      try {
+        const t = sib.querySelector && sib.querySelector('.mes_text');
+        if (t) {
+          const run = collectLines(t);
+          if (run) {
+            const blk = extractBlock(run.map(nodeText).join('\n'));
+            if (blk) return parseState(blk.body);
+          }
+        }
+      } catch (e) { /* 单楼坏掉不影响本轮渲染 */ }
+      sib = sib.previousElementSibling;
+    }
+    return null;
+  }
+
   function sweep() {
     const nodes = DOC.querySelectorAll('.mes_text');
     for (const el of nodes) {
@@ -3147,7 +3321,7 @@
           if (!meaningful) break;
 
           const holder = DOC.createElement('div');
-          holder.innerHTML = render(st);
+          holder.innerHTML = render(st, prevFloorOf(el));
           const wrap = holder.firstElementChild;
           if (!wrap) break;
 
@@ -3459,6 +3633,9 @@
   .tc-ack-hd i{font-style:normal;font-size:8.5px;letter-spacing:.14em;opacity:.55}
   .tc-ack-r{display:flex;align-items:baseline;gap:7px}
   .tc-ack-r b{font-size:18px;line-height:1.05;font-variant-numeric:tabular-nums;color:var(--ac)}
+  .tc-ack-def,.tc-pace-def{font-style:normal;font-size:8px;letter-spacing:.06em;padding:0 4px;border-radius:2px;
+    border:1px solid currentColor;opacity:.72;margin-left:5px;vertical-align:2px}
+  .tc-pace-reset{font-style:normal;font-size:8.5px;letter-spacing:.04em;opacity:.8;margin-left:6px;color:#a5b4fc}
   .tc-ack-tier{font-style:normal;font-size:10px;padding:0 5px;border-radius:2px;
     background:rgba(148,163,184,.18);color:var(--ac)}
   .tc-ack-bar{display:flex;gap:2px;margin:4px 0 3px}
@@ -3521,6 +3698,11 @@ details[open]>.tc-skfl-ar::after{content:'▴'}
 .tc-skill em{grid-column:2;grid-row:1/3;align-self:center;font-style:normal;
   font-size:9.5px;color:var(--gold);white-space:nowrap}
 .tc-skill span{grid-column:1;color:#c9d4e3}
+/* 冷却中：整行降亮度 + 前缀 ⌛ N。灰度在小屏不可靠，所以「有几回合」永远由那个 ⌛ 数字说，
+   颜色只做辅助——只靠颜色的话，色弱和低亮度屏都读不出「这招还不能放」。 */
+.tc-skill.cd-cool{opacity:.62}
+.tc-skill.cd-cool b{color:#94a3b8}
+.tc-skill .tc-cd-rest{font-style:normal;font-weight:700;color:#fbbf24;font-variant-numeric:tabular-nums}
 
 .tc-eq{display:flex;flex-direction:column;gap:1px;margin-top:5px}
 .tc-eqrow{display:grid;grid-template-columns:64px 1fr;gap:8px;font-size:11.5px;
@@ -4223,7 +4405,7 @@ details[open]>.tc-skfl-ar::after{content:'▴'}
   box-shadow: inset 0 0 26px rgba(240,160,32,.2); }
 .tc-yz.full .kf-seal { color: #ffe9bf; background: rgba(240,160,32,.18); }
 /* 源质环：逐色（每元自己的色相）、点数在节点下 */
-.yz-ring { position: relative; height: 152px; margin: 5px 0 1px; }
+.yz-ring { position: relative; height: 158px; margin: 5px 0 3px; }
 .yz-n { position: absolute; transform: translate(-50%,-50%); text-align: center; }
 .yz-n b { display: flex; align-items: center; justify-content: center; width: 28px; height: 28px;
   border-radius: 6px; font-size: 10.5px; font-weight: 700; color: #8b7a55;
