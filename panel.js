@@ -9,7 +9,7 @@
   if (window.__twCardLoaded) return;
   window.__twCardLoaded = true;
 
-  const VERSION = '3.49.0';
+  const VERSION = '3.50.0';
 
   /* 面板尺寸偏好：紧凑(tc-mini)/完整。localStorage 持久化，点击 .tc-size 全局切换 */
   const SIZE_KEY = 'tw-card:size';
@@ -1565,7 +1565,11 @@
     st.warehouses = [...whmap.keys()].sort((a, b) => a - b).map(i => { const w = whmap.get(i); w.idx = i; return w; });
     st.places = [...plmap.keys()].sort((a, b) => a - b).map(i => { const p = plmap.get(i); p.idx = i; return p; });
     st.geneLocks = [...lkmap.keys()].sort((a, b) => a - b).map(i => { const l = lkmap.get(i); l.idx = i; return l; });
-    st.mobs = [...mmap.keys()].sort((a, b) => a - b).map(k => mmap.get(k));
+    /* mob 的编号只在 map 的键上，元素本身不带号 —— 跨楼按号比（意图未续写）会全部落到 1 号。
+       这里把键回填到元素上，`n` 就是它在这一楼里的编号（mob1 → 1）。 */
+    st.mobs = [...mmap.keys()].sort((a, b) => a - b).map(function (k) {
+      const mob = mmap.get(k); mob.n = k; return mob;
+    });
     if (rec.mobs.length) st.mobs = st.mobs.concat(rec.mobs);
     return st;
   }
@@ -3235,6 +3239,7 @@
     st.cdWarns = cdStallOf(st, prev || null);
     st.yzDrift = yzDriftOf(prev || null, st);
     st.missRows = missingRowsOf(prev || null, st);
+    st.intentDrops = intentDropOf(prev || null, st);
     const scene = seg(st.scene);
     const out = [];
     const sect = (zh, en) => `<div class="tc-sect"><i></i><b>${esc(zh)}</b><em>${en}</em></div>`;
@@ -3483,6 +3488,9 @@
         return '<span class="tc-crwarn-line">⚠ ' + esc(w) + '</span>';
       }).join('') + '</div>');
     }
+    (st.intentDrops || []).forEach(function (w) {
+      log.push('<div class="tc-dmg-warn tc-intentdrop">⚠ ' + esc(w) + '</div>');
+    });
     (st.weakWarns || []).forEach(function (w) {
       const txt = w.why === 'hidden'
         ? `弱点未暴露却算进了加成：${esc(w.mob)} 的弱点还没识破（判「${esc(w.verdict || '—')}」）`
@@ -3629,6 +3637,35 @@
      措辞按「上一楼有、这一楼没有」写，不写「错误」——血统被剥离是合法失去，
      那种情况模型会在 world 写缘由；写成「错误」玩家只会以为面板坏了。
      报了就是报了，不做任何渲染补救：缺行就是缺行，不补空卡、不补「无」。 */
+  /* 意图未续写（v3.50.0）：判「有没有接着写」，不判「有没有落地」。
+     意图可以被打断/闪避/目标已死，判兑现必然误报；而误报一次玩家就学会无视黄字（§7 27）。
+     四条边界：
+       · 上一楼该 mob 的 意图 为空或 `无` → 没有可续的东西，不报
+       · 这一楼该 mob 整行消失（被打死/退场）→ 不报
+       · 上一楼没有该号 mob → 不报
+       · 这一楼意图非空 → 不报 */
+  const MOB_NO_INTENT = /^(?:无|—|-|–|none|null)?$/i;
+  function intentDropOf(prevSt, curSt) {
+    const out = [];
+    if (!prevSt) return out;
+    const prev = prevSt.mobs || [];
+    const cur = curSt.mobs || [];
+    if (!prev.length || !cur.length) return out;
+    const cm = new Map();
+    cur.forEach(function (m) { cm.set(m.n || 1, m); });
+    prev.forEach(function (m) {
+      const n = m.n || 1;
+      const was = String(m.intent || '').trim();
+      if (MOB_NO_INTENT.test(was)) return;
+      const now = cm.get(n);
+      if (!now) return;
+      const is = String(now.intent || '').trim();
+      if (!MOB_NO_INTENT.test(is)) return;
+      out.push('mob' + n + ' 上轮意图未续写（上一楼「' + was + '」）—— 意图可被打断或失败，但不能不写');
+    });
+    return out;
+  }
+
   function missingRowsOf(prevSt, curSt) {
     const out = [];
     if (!prevSt) return out;
@@ -3636,15 +3673,22 @@
       const prev = prevSt[key] || [];
       const cur = curSt[key] || [];
       if (!prev.length) return;
-      const seen = new Set(cur.map(function (r) { return r.n || 1; }));
+      /* lk 行挂在 st.geneLocks 里用的是 .idx 不是 .n，两种都得认——
+         否则 lk1 与 lk2 会被算成同一个号，「按号比」整个失效（v3.50.0 实测）。 */
+      const numOf = function (r) { return r.n || r.idx || 1; };
+      const seen = new Set(cur.map(numOf));
       prev.forEach(function (r) {
-        const n = r.n || 1;
+        const n = numOf(r);
         if (!seen.has(n)) {
           out.push('本轮缺 ' + label + n + ' 行（上一楼有）—— 若确实失去这套体系，在 world 写明');
         }
       });
     };
     chk('kbls', 'kbl'); chk('yzs', 'yz'); chk('bls', 'bl');
+    /* lk 与上面三个同族：按号比「上一楼有、这一楼没了」。
+       它不对「从没出现过」报错——prev 里没有就没有 loop，所以基因锁整场没开过也不会响。
+       若条目侧改成「只在出现过之后必须写」，这条判据不用动。 */
+    chk('geneLocks', 'lk');
     /* 无编号键：ack（认可度 R，只在幕间变）与 pace（相位/轮/张/喘，场内累计）。
        这两个与 zw 不是一类——zw 是场地属性，进新副本就该重算，跨楼比会误报；
        而 ack/pace 上一楼有、这一楼没有就是真丢了，不是重算。
