@@ -9,7 +9,7 @@
   if (window.__twCardLoaded) return;
   window.__twCardLoaded = true;
 
-  const VERSION = '3.40.0';
+  const VERSION = '3.41.0';
 
   /* 面板尺寸偏好：紧凑(tc-mini)/完整。localStorage 持久化，点击 .tc-size 全局切换 */
   const SIZE_KEY = 'tw-card:size';
@@ -2101,6 +2101,59 @@
     return { bal: k.hasScale ? k.scale : legacy.bal, parse: k.hasParse ? k.parsed : legacy.parse, warns: warns };
   }
 
+  /* ── kbl 漂移守卫：只报「变了且不该变」 ────────────────────────
+     基准放会话内存（sweep 每轮从文档头重建），刷新即丢：跨会话比较会把
+     「玩家换了一张卡」读成「质点缩水」，那种误报玩家没法解释、只能学会无视。
+     不报三类：没变 / 阶升与树变（合法推进）/ 首见（没有基准就不判）。
+     ② 的豁免宁宽不严：result/world 里出现吞词，或本轮 pts 有支出，都当「有事件」。 */
+  const KBL_EAT_RE = /吞|吞噬|献祭|仪式/;
+  function kblPtsOf(st) {
+    return (st.players || []).reduce(function (a, p) {
+      const raw = p && p.ptsRow && p.ptsRow.total != null ? String(p.ptsRow.total) : '';
+      const v = parseFloat(raw.replace(/[^0-9.\-]/g, ''));
+      return a + (isNaN(v) ? 0 : v);
+    }, 0);
+  }
+  function kblSnapOf(st) {
+    const m = new Map();
+    const pts = kblPtsOf(st);
+    (st.kbls || []).forEach(function (k) {
+      m.set(k.n || 1, { solved: (k.solved || []).slice(), inversed: (k.inversed || []).slice(), pts: pts });
+    });
+    return m;
+  }
+  /* 基准推进：不改入参、返回新 Map。抽成纯函数是为了能直接钉「基准在正确的时刻前进」——
+     wiring 那两行测不到，而「第二次 sweep 拿自己当上一楼」正是黄字闪一下的位置。 */
+  function kblStep(base, st) {
+    const next = new Map(base || []);
+    kblSnapOf(st).forEach(function (v, k2) { next.set(k2, v); });
+    return next;
+  }
+  function kblDriftOf(base, st) {
+    const out = [];
+    if (!base || !base.size) return out;            /* 没有基准就不判 */
+    const txt = String(st.result || '') + ' ' + String(st.world || '') + ' ' + String(st.next || '');
+    const ate = KBL_EAT_RE.test(txt);
+    const pts = kblPtsOf(st);
+    const spent = function (prev) { return prev != null && pts < prev; };
+    (st.kbls || []).forEach(function (k) {
+      const prev = base.get(k.n || 1);
+      if (!prev) return;                            /* 首见 / 换卡：没有基准 */
+      const hadEvent = ate || spent(prev.pts);
+      [['solved', '解'], ['inversed', '逆']].forEach(function (pair) {
+        const f = pair[0], label = pair[1];
+        const now = k[f] || [], was = prev[f] || [];
+        now.forEach(function (nm) {
+          if (was.indexOf(nm) < 0 && !hadEvent) out.push('凭空新增：' + nm + '（' + label + '）—— 本楼无吞质点事件');
+        });
+        was.forEach(function (nm) {
+          if (now.indexOf(nm) < 0) out.push(nm + ' 从 ' + label + ' 里消失；解与逆只增不减');
+        });
+      });
+    });
+    return out;
+  }
+
   function parseKbl(v) {
     const o = { tree: '', stage: '', solved: [], inversed: [], usedRaw: '', bad: [], unknown: [], errs: [], warns: [], actRaw: '', hasScale: false, scale: null, hasParse: false, parsed: null, parsedWroteCap: null, raw: String(v || '') };
     String(v || '').split(/[｜|]/).map(x => x.trim()).filter(Boolean).forEach(seg => {
@@ -3196,6 +3249,9 @@
     (st.cdWarns || []).forEach(function (w) {
       log.push(`<div class="tc-dmg-warn tc-cdwarn">⚠ ${esc(w)}</div>`);
     });
+    (st.kblDrift || []).forEach(function (w) {
+      log.push(`<div class="tc-dmg-warn tc-kbldrift">⚠ ${esc(w)}</div>`);
+    });
     (st.weakWarns || []).forEach(function (w) {
       const txt = w.why === 'hidden'
         ? `弱点未暴露却算进了加成：${esc(w.mob)} 的弱点还没识破（判「${esc(w.verdict || '—')}」）`
@@ -3299,6 +3355,7 @@
 
   function sweep() {
     const nodes = DOC.querySelectorAll('.mes_text');
+    let kblBase = new Map();   /* 会话内存基准：每轮 sweep 从文档头重建，刷新即丢 */
     for (const el of nodes) {
       try {
         let guard = 0;
@@ -3311,6 +3368,7 @@
           if (!blk) break;
 
           const st = parseState(blk.body);
+          st.kblDrift = kblDriftOf(kblBase, st);
           /* 守卫：完全没有已定义状态键的段才跳过。
              孤立的 next: / check: / bond: 等附属段（被正文与主状态块隔开）也必须渲染，
              否则主块渲染完、后续孤段会被静默丢弃（v3.10.0 真实故障：next: 丢失）。 */
@@ -3322,6 +3380,7 @@
 
           const holder = DOC.createElement('div');
           holder.innerHTML = render(st, prevFloorOf(el));
+          kblBase = kblStep(kblBase, st);
           const wrap = holder.firstElementChild;
           if (!wrap) break;
 
@@ -4658,6 +4717,6 @@ details[open]>.tc-skfl-ar::after{content:'▴'}
   } catch (e) { /* 忽略 */ }
 
   /* 仅供测试，非公开 API，可随实现变动 */
-  window.__twCard = { version: VERSION, parseState, render, sweep, keys: EXT_KEYS, extractBlock: extractBlock, extHit: extHit, CSS: CSS, injectCss: injectCss, parseShelter, parseDisaster, parseWarehouse, parsePlace, splitInlineKeys, keyHits, checkAudit, parseCr, parseKbl, parseYz, parseAck, ackOf, parsePace, paceOf, paceWarnOf, BLOOD_KEYS: BLOOD_KEYS, bloodCapLine: bloodCapLine, bloodScale: bloodScale };
+  window.__twCard = { version: VERSION, parseState, render, sweep, keys: EXT_KEYS, extractBlock: extractBlock, extHit: extHit, CSS: CSS, injectCss: injectCss, parseShelter, parseDisaster, parseWarehouse, parsePlace, splitInlineKeys, keyHits, checkAudit, parseCr, parseKbl, parseYz, parseAck, ackOf, parsePace, paceOf, paceWarnOf, kblDriftOf, kblSnapOf, kblStep, BLOOD_KEYS: BLOOD_KEYS, bloodCapLine: bloodCapLine, bloodScale: bloodScale };
   console.log('[tw-card] v' + VERSION + ' ready');
 })();
