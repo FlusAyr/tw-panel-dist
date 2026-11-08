@@ -9,7 +9,7 @@
   if (window.__twCardLoaded) return;
   window.__twCardLoaded = true;
 
-  const VERSION = '3.46.0';
+  const VERSION = '3.47.0';
 
   /* 面板尺寸偏好：紧凑(tc-mini)/完整。localStorage 持久化，点击 .tc-size 全局切换 */
   const SIZE_KEY = 'tw-card:size';
@@ -2009,12 +2009,21 @@
   const KBL_TOTAL = 20;
   /* 激活槽：同时生效的权限数。D1/C1/B2/A3/S5/SS7/SSS∞ —— 由面板按「阶」算，模型不写 */
   const KBL_ACT_CAP = { 'D': 1, 'C': 1, 'B': 2, 'A': 3, 'S': 5, 'SS': 7, 'SSS': Infinity };
-  function actCapOf(stage) {
+  /* 完整侧：吞满十质点 = 一整侧。规则侧给的是「激活槽 +1」，所以槽数必须在这里加，
+     否则那条规则玩家永远看不到。阈值用 >= 而不是 > ：数据异常吞到 11、12 个时仍算完整，且不报错。
+     两侧各自独立判定 —— 一侧满不牵连另一侧。 */
+  const KBL_FULL_SIDE = 10;
+  const kblSideFull = function (list) { return (list || []).length >= KBL_FULL_SIDE; };
+  function actCapOf(stage, solved, inversed) {
     /* 直接按字符串取，别走 gradeOf —— 它把 C/D 折成 A（那是给四档印章用的），
        而激活槽 D1/C1/B2/A3/S5/SS7 是逐档不同的。 */
     const m = String(stage || '').toUpperCase().match(/(SSS|SS|S|A|B|C|D)/);
     const g = m ? m[1] : 'C';
-    return KBL_ACT_CAP[g] === undefined ? KBL_ACT_CAP['C'] : KBL_ACT_CAP[g];
+    const base = KBL_ACT_CAP[g] === undefined ? KBL_ACT_CAP['C'] : KBL_ACT_CAP[g];
+    /* SSS 不受槽限（∞）：加一没有意义，但也别把 ∞ 算成有限值。
+       这里显式短路，不靠 Infinity 自带的算术去兜。 */
+    if (!isFinite(base)) return base;
+    return base + (kblSideFull(solved) ? 1 : 0) + (kblSideFull(inversed) ? 1 : 0);
   }
   /* 十质点十色（用户指定色值），逆树同色相、亮 −25% */
   const KBL_COLORS = {
@@ -2239,7 +2248,7 @@
 
     /* 激 段：`激 3/3 王冠 智慧 理解`（M 由面板按阶算；`激 0/3` 后面什么都不跟，这一段不许省）
        「吞下了」与「正在生效」是两件事：前者是拥有，后者是这次配置。 */
-    o.actCap = actCapOf(o.stage);
+    o.actCap = actCapOf(o.stage, o.solved, o.inversed);
     o.act = [];
     o.actN = 0;
     o.actInf = false;
@@ -2470,6 +2479,11 @@
 
   function renderKbl(k, owner, sc, entry) {
     const grade = gradeOf(k.stage);
+    /* 完整侧：两枚徽章最多并存，各自独立；双树满 20 不新增徽章 —— 那是 SSS 本源的印章，
+       位置在它们右边，别被挤掉。收起态与展开态共用这一行，所以收起时也带。 */
+    const upFull = kblSideFull(k.solved);
+    const invN = (k.inversed || []).length;
+    const invFull = kblSideFull(k.inversed);
     const ss = grade === 'SS' || grade === 'SSS';
     const sss = grade === 'SSS';
     const open = foldOpen(owner || 'p1', 'kbl', k.used);
@@ -2485,7 +2499,8 @@
         `<i class="kb-tree">树 ${esc(k.tree || '正')}</i>` +
         `<i class="kb-stage">阶 ${esc(k.stage || '—')}</i>` +
         (k.actRaw ? `<i class="kb-act${(!k.actInf && isFinite(k.actCap) && k.actN > k.actCap) ? ' over' : ''}">激 ${k.actInf ? '∞' : (k.actN + '/' + (isFinite(k.actCap) ? k.actCap : '∞'))}</i>` : '') +
-        `<i class="kb-used">解 ${k.used}/${k.total}</i>` +
+        `<i class="kb-used${upFull ? ' full' : ''}">解 ${k.used}/${k.total}${upFull ? ' · 完整' : ''}</i>` +
+        (invFull ? `<i class="kb-inv full">逆 ${invN}/${k.total} · 完整</i>` : '') +
         `<i class="kb-daat${sss ? ' two' : ''}">Da'at ●</i>` +
         (ss ? `<span class="kf-seal">${grade}</span>` : '') +
         `<span class="kf-ar" aria-hidden="true"></span>` +
@@ -4670,6 +4685,10 @@ details[open]>.tc-skfl-ar::after{content:'▴'}
 .kb-tree { border: 1px solid rgba(150,140,255,.55); color: #b7a9ff; background: rgba(120,104,255,.14); }
 .kb-stage { border: 1px solid rgba(120,200,255,.45); color: #9fd4ff; background: rgba(60,150,220,.12); }
 .kb-used { border: 1px solid rgba(150,140,255,.45); color: #b7a9ff; background: rgba(120,104,255,.12); }
+/* 完整侧：实心高亮。不是「再亮一点」——满一侧是量级变化，得能从一排浅底徽章里被一眼挑出来 */
+.kb-used.full, .kb-inv.full { border-color: rgba(196,181,253,.95); color: #1a1030;
+  background: linear-gradient(180deg, #ddd6fe, #c4b5fd); font-weight: 700; }
+.kb-inv { border: 1px solid rgba(150,140,255,.45); color: #b7a9ff; background: rgba(120,104,255,.12); }
 .tc-yz .kb-used { border-color: rgba(255,190,90,.4); color: #f0c882; background: rgba(240,160,32,.12); }
 .kb-daat { border: 1px solid rgba(247,245,255,.42); color: #f2f1ff; background: rgba(247,245,255,.10); }
 .kb-daat.two { background: linear-gradient(90deg, rgba(247,245,255,.16), rgba(140,120,255,.20)); }
