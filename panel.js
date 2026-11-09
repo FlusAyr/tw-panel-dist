@@ -9,7 +9,7 @@
   if (window.__twCardLoaded) return;
   window.__twCardLoaded = true;
 
-  const VERSION = '3.52.0';
+  const VERSION = '3.53.0';
 
   /* 面板尺寸偏好：紧凑(tc-mini)/完整。localStorage 持久化，点击 .tc-size 全局切换 */
   const SIZE_KEY = 'tw-card:size';
@@ -3732,8 +3732,35 @@
     return out;
   }
 
+  /* 找不到楼层是唯一一种「悄无声息、连一次报错都没有」的失败：
+     DOC 指向的文档里没有聊天（手机端跨域 iframe 时 DOC 会退回自身 document），
+     nodes 是空集合 → 循环 0 次 → 不抛错 → 不进任何 catch。玩家看到「整张卡不出现，控制台什么都没有」。
+     兜底顺序 = 先 DOC（跟着宿主走），再 document（真正的自身文档），两个都空才报一次。 */
+  let missTextWarned = false;
+  function mesTextNodes() {
+    let nodes;
+    try { nodes = DOC.querySelectorAll('.mes_text'); } catch (e) { nodes = []; }
+    if (!nodes.length && DOC !== document) {
+      try { nodes = document.querySelectorAll('.mes_text'); } catch (e) { nodes = []; }
+    }
+    if (!nodes.length && !missTextWarned) {
+      missTextWarned = true;
+      console.warn('[tw-card] 未找到 .mes_text（已查 DOC 与自身 document）—— 面板不会渲染任何卡；自检用 __twCard.diag()');
+    }
+    return nodes;
+  }
+
+  let lastErr = null;
+  function logSweepError(e) {
+    lastErr = { msg: String((e && e.message) || e), stack: String((e && e.stack) || ''), at: Date.now() };
+    try { if (window.__twCard) window.__twCard.lastErr = lastErr; } catch (e2) { /* 挂不上就算了，日志仍要出 */ }
+    try {
+      console.error('[tw-card] 整轮 sweep 失败', e);
+    } catch (e2) { /* 控制台不可用就算了，日志这条不能再抛第二次 */ }
+  }
+
   function sweep() {
-    const nodes = DOC.querySelectorAll('.mes_text');
+    const nodes = mesTextNodes();
     let kblBase = new Map();   /* 会话内存基准：每轮 sweep 从文档头重建，刷新即丢 */
     for (const el of nodes) {
       try {
@@ -3790,7 +3817,15 @@
             for (const n of run) { try { n.remove(); } catch (e) { n.textContent = ''; } }
           }
         }
-      } catch (e) { /* 单条失败不影响其它楼层 */ }
+      } catch (e) {
+        let tag = '';
+        try {
+          const host = (el && el.closest) ? el.closest('.mes') : null;
+          tag = (host && (host.getAttribute('mesid') || host.getAttribute('data-mesid'))) || '';
+          if (!tag) tag = String(nodeText(el) || '').slice(0, 40);
+        } catch (e2) { /* 定位信息拿不到不能连累日志本身 */ }
+        console.error('[tw-card] 楼层渲染失败（' + (tag || '未知楼层') + '）', e);
+      }
     }
   }
 
@@ -5214,18 +5249,40 @@ details[open]>.tc-skfl-ar::after{content:'▴'}
   installSizeToggle();
   let n = 0;
   function loop() {
-    try { injectCss(); sweep(); } catch (e) { /* 静默 */ }
+    try { injectCss(); sweep(); } catch (e) { logSweepError(e); }
     if (++n < 400) setTimeout(loop, 700);
   }
   loop();
 
   try {
     const chat = DOC.getElementById('chat');
-    if (chat) new MutationObserver(() => setTimeout(sweep, 60)).observe(chat, { childList: true, subtree: true });
+    if (chat) new MutationObserver(() => setTimeout(function () {
+      try { sweep(); } catch (e) { logSweepError(e); }
+    }, 60)).observe(chat, { childList: true, subtree: true });
   } catch (e) { /* 忽略 */ }
+
+  /* 手机端排查用：把「哪一层断了」变成一句话能说清的数。
+     不打按钮、不上界面——玩家/客服在控制台敲 __twCard.diag() 就有答案。 */
+  function diag() {
+    let docHasMesText = 0, docHasChat = false, selfHasMesText = 0, docIsParent = false;
+    try { docHasMesText = DOC.querySelectorAll('.mes_text').length; } catch (e) { /* 读不到记 0 */ }
+    try { docHasChat = !!DOC.getElementById('chat'); } catch (e) { /* 同上 */ }
+    try { selfHasMesText = document.querySelectorAll('.mes_text').length; } catch (e) { /* 同上 */ }
+    try { docIsParent = !!(window.parent && window.parent !== window && window.parent.document === DOC); } catch (e) { /* 跨域即 false */ }
+    return {
+      version: VERSION,
+      docIsParent: docIsParent,
+      docHasMesText: docHasMesText,
+      docHasChat: docHasChat,
+      selfHasMesText: selfHasMesText,
+      innerWidth: window.innerWidth,
+      ua: (navigator && navigator.userAgent) || '',
+      lastErr: lastErr,
+    };
+  }
 
   /* 仅供测试，非公开 API，可随实现变动 */
   window.__twCard = {
-    yzDriftOf: yzDriftOf, prevFloorOf: prevFloorOf, version: VERSION, parseState, render, sweep, keys: EXT_KEYS, extractBlock: extractBlock, extHit: extHit, CSS: CSS, injectCss: injectCss, parseShelter, parseDisaster, parseWarehouse, parsePlace, splitInlineKeys, keyHits, checkAudit, parseCr, parseKbl, parseYz, parseZw, parseBl, blText, parseAck, ackOf, parsePace, paceOf, paceWarnOf, kblDriftOf, kblSnapOf, kblStep, missingRowsOf, BLOOD_KEYS: BLOOD_KEYS, bloodCapLine: bloodCapLine, bloodScale: bloodScale };
+    yzDriftOf: yzDriftOf, prevFloorOf: prevFloorOf, version: VERSION, parseState, render, sweep, keys: EXT_KEYS, extractBlock: extractBlock, extHit: extHit, CSS: CSS, injectCss: injectCss, parseShelter, parseDisaster, parseWarehouse, parsePlace, splitInlineKeys, keyHits, checkAudit, parseCr, parseKbl, parseYz, parseZw, parseBl, blText, parseAck, ackOf, parsePace, paceOf, paceWarnOf, kblDriftOf, kblSnapOf, kblStep, missingRowsOf, diag: diag, mesTextNodes: mesTextNodes, BLOOD_KEYS: BLOOD_KEYS, bloodCapLine: bloodCapLine, bloodScale: bloodScale };
   console.log('[tw-card] v' + VERSION + ' ready');
 })();
