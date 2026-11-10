@@ -9,7 +9,7 @@
   if (window.__twCardLoaded) return;
   window.__twCardLoaded = true;
 
-  const VERSION = '3.53.0';
+  const VERSION = '3.55.0';
 
   /* 面板尺寸偏好：紧凑(tc-mini)/完整。localStorage 持久化，点击 .tc-size 全局切换 */
   const SIZE_KEY = 'tw-card:size';
@@ -91,7 +91,11 @@
   const extHit = (k) => { const e = EXT_KEYS.find(x => k.startsWith(x.key) && (k.length === x.key.length || /^[0-9]+$/.test(k.slice(x.key.length)))); return e ? { e: e, num: k.length === e.key.length ? 1 : +k.slice(e.key.length) } : null; };
 
   /* 无键名 mob 裸文本识别（「变异体甲 精英 80/80」式——AI 抄面板/联机同步丢格式时兜底） */
-  const MOB_GRADE_SRC = 'BOSS[^\\s|｜]*|Boss[^\\s|｜]*|头目|首领|精英|小兵|杂兵';
+  /* v3.55.0 · 补 `超规格`：世界书把它列为独立敌人阶级（越级目标，力量高于普通 BOSS），
+     面板原先不认识它 —— 写了等于没写：卡片退回「小兵」配色，裸文本兜底 MOB_PLAIN_A 也不认，
+     整行被当成普通段落丢掉。写进 MOB_GRADE_SRC 一处，下面三处同时生效：
+     parseMob 的 gradeRe / gradeIn、裸文本 MOB_PLAIN_A。 */
+  const MOB_GRADE_SRC = '超规格|BOSS[^\\s|｜]*|Boss[^\\s|｜]*|头目|首领|精英|小兵|杂兵';
 
   /* 「终结词」：模型在 HP 还没扣到 0 时最常拿来收尾的几个词。
      为什么是这几个 —— 它们都在声称「这个敌人已经没了」，而规则里唯一合法的
@@ -1270,7 +1274,7 @@
   function parseDmg(v) {
     const o = {
       from: '', to: '', cause: '', calc: '', kindRaw: '', kind: '', part: '',
-      amount: null, hpBefore: null, hpAfter: null, verdictRaw: '', verdict: '',
+      amount: null, hpBefore: null, hpAfter: null, verdictRaw: '', verdict: '', verdictBad: '',
       extra: [], mismatch: false, delta: null, overflow: 0,
     };
     seg(v).forEach((piece, i) => {
@@ -1303,6 +1307,10 @@
       if (/^判[:：]?/.test(x)) {
         o.verdictRaw = x.replace(/^判[:：]?\s*/, '').trim();
         o.verdict = DMG_VERDICTS[o.verdictRaw] || '';
+        /* v3.55.0 · 六选一之外的判词：verdict 落空，于是「命中/暴击/闪避/格挡/破防/未破防」
+           这六档的着色、图标、弱点判定全部失效 —— 而卡面看上去照样有一行「判」，
+           看不出它没被认。记下原文，交给 render 报一次；**不改写、不猜近义词**。 */
+        if (o.verdictRaw && !o.verdict) o.verdictBad = o.verdictRaw;
         return;
       }
       o.extra.push(x);
@@ -1592,12 +1600,75 @@
     st.warehouses = [...whmap.keys()].sort((a, b) => a - b).map(i => { const w = whmap.get(i); w.idx = i; return w; });
     st.places = [...plmap.keys()].sort((a, b) => a - b).map(i => { const p = plmap.get(i); p.idx = i; return p; });
     st.geneLocks = [...lkmap.keys()].sort((a, b) => a - b).map(i => { const l = lkmap.get(i); l.idx = i; return l; });
+    /* v3.55.0 · 双账本出口。lk<N> 画完整的基因锁卡（st.geneLocks），lock<N> 是旧写法，
+       只有 stage / 心魔 / 超标 / 冷却，且仅当 p 行没写时才当 p.lock 的文字兜底（见下）。
+       两行同时出现时，玩家只会看到 lk 那张卡，lock 的心魔・超标・冷却**无处可去**——
+       写的人以为写了，看的人看不见。世界书已把 lock 标为停写项，这里只负责把冲突说出来，
+       不合并、不优选、不猜测（两个来源各算一份就会有两套数，那是 §7 第 15 条的老病）。 */
+    st.dualLocks = (lkmap.size > 0 && lockm.size > 0)
+      ? { lk: [...lkmap.keys()].sort((a, b) => a - b), lock: [...lockm.keys()].sort((a, b) => a - b) }
+      : null;
     /* mob 的编号只在 map 的键上，元素本身不带号 —— 跨楼按号比（意图未续写）会全部落到 1 号。
        这里把键回填到元素上，`n` 就是它在这一楼里的编号（mob1 → 1）。 */
     st.mobs = [...mmap.keys()].sort((a, b) => a - b).map(function (k) {
       const mob = mmap.get(k); mob.n = k; return mob;
     });
     if (rec.mobs.length) st.mobs = st.mobs.concat(rec.mobs);
+
+    /* ⑥ 敌人行动有没有真的结算。判据 v2：`敌：` 是**四段式**
+       `敌：<名> <动作>→<目标> <判定> <结果>`
+         判定 = 1d100 对 DC ／ 双方属性对抗 ／ 伤害骰（都要有数字）
+         结果 = 伤害（命中/伤害 ×N、HP −N）或 反抗（压制/位移/缴械/眩晕…）
+       「未中／格挡／闪避」是**判定**不是结果 —— 后面必须再接一个反抗项，否则这一刀等于没发生。
+       这条正是用户抱怨流出的出口：`未中` 是系统里最后一个「合法但不产生任何效果」的写法。
+
+       三条子判据（同一 class，不同文案）：
+         B1 无判定：段里没有任何数字（且已有反抗词）→ 缺判定
+         B2 有判定无结果：有数字，但数字不在伤害位置、段里也没有反抗词（典型 `未中` 结尾）
+         B3 无判定无结果：只有动作（`举起斧头` 这种）
+       **只报不改**：绝不自动补 `敌：`，绝不改回合数。 */
+    st.enemyAudit = (function () {
+      /* 为什么不做「名字出现在 team 段里就跳过」的排除：mob 在渲染结构上被钉死在右翼
+         「敌方威胁」列（panel.js 里 team → 左翼我方小队、mob → 右翼），友方没有 CPU 通道会走 mob。
+         那条排除换来的收益是 0，代价是漏掉「同名杂兵 + 队友」这一类真敌人 —— 不划算，不加。 */
+      if (!st.mobs.length) return null;                        /* 无在场敌人：与「旧卡不报」同一条纪律 */
+      const res = String(st.result || '');
+      if (!res.trim()) return null;                            /* 没有 result 行（旧卡/极简楼）不判 */
+      const pc = paceOf(st);
+      if (pc.phase === '喘息') return null;                     /* 喘息相位本来就禁战斗结算与 dmg */
+      if (pc.phase === '收束' && /脱离|撤离|撤退/.test(res)) return null;
+      /* 按 `敌：` 切段（每个敌人一条，BOSS/超规格每轮两条）。不能按行切：模型常写在同一行里。 */
+      const hit = res.split(/(?=敌\s*[:：])/).filter(function (x) { return /^敌\s*[:：]/.test(x.trim()); });
+      if (!hit.length) return { noSeg: true, unsettled: [] };
+      /* 伤害结果：数字必须落在伤害位置，否则 `d100=34 vs DC70` 会把一切放行（假绿的老路） */
+      const DMG = /(?:命中|伤害|造成|扣|损失|掉)[^0-9]{0,6}[0-9]|[−\-–—－]\s*[0-9]+\s*(?:HP|SP|点)|\(\s*[−\-]\s*[0-9]+\s*\)/i;
+      /* 反抗结果闭集：命中/格挡/闪避 之外的「产生了变化」的词 */
+      const RESIST = /压制|破防|眩晕|流血|失衡|缴械|被围|位移|侧移|击退|击飞|击倒|倒地|夺走|夺权|减速|减缓|僵直|沉默|封技|耗尽|牵制|逼退|撞飞|打落|打断|中断|破解/;
+      /* B4 专用：伤害位上的数字本身。`d100=34 vs DC70` 里的 34/70 不算——只在伤害词后面抓。 */
+      const DMG_N = /(?:命中|伤害|造成|扣|损失|掉)[^0-9]{0,6}([0-9]+)/;
+      const DIE = /\bd(?:4|6|8|10|12)\b|伤害骰/i;                    /* 伤害骰体系：1 点完全合法，不判 */
+      const D100DC = /d100\s*[=＝]?\s*[0-9]+\s*(?:vs|VS|对)\s*DC/i;
+      const unsettled = [];
+      const symbolic = [];
+      hit.forEach(function (x) {
+        const body = x.trim().replace(/^敌\s*[:：]/, '').trim();
+        const nm = (body.split(/[\s｜|,，→]/)[0] || '').slice(0, 12) || '?';
+        const digits = /[0-9]/.test(body);
+        const resist = RESIST.test(body);
+        if (!digits && !resist) { unsettled.push({ name: nm, kind: 'B3' }); return; }  /* 只有动作 */
+        if (!digits) { unsettled.push({ name: nm, kind: 'B1' }); return; }             /* 有反抗没判定 */
+        if (!(DMG.test(body) || resist)) { unsettled.push({ name: nm, kind: 'B2' }); return; }
+        /* B4：判定是 d100 对 DC（非伤害骰）而伤害只有 1~2 点 —— 疑「文字版空转」。
+           定为 WARN 不是 error：残血补刀、压制性轻击都合法，1 点伤害在规则上没错。
+           每楼聚合成一条，避免一屏多行把 ⚠ 变成背景噪音。 */
+        const dn = body.match(DMG_N);
+        if (dn && D100DC.test(body) && !DIE.test(body) && (+dn[1] === 1 || +dn[1] === 2)) {
+          symbolic.push({ name: nm, dmg: +dn[1] });
+        }
+      });
+      if (!unsettled.length && !symbolic.length) return null;
+      return { noSeg: false, unsettled: unsettled, symbolic: symbolic };
+    })();
     return st;
   }
 
@@ -2021,7 +2092,7 @@
   }
   function parseAck(v) {
     const p = seg(v);
-    const o = { rRaw: null, tierRaw: '', enemyRaw: '', dcRaw: '', reason: '', trailRaw: '', raw: v };
+    const o = { rRaw: null, tierRaw: '', enemyRaw: '', dcRaw: '', reason: '', trailRaw: '', raw: v, missing: [] };
     for (const x of p) {
       let m;
       if ((m = x.match(/^(?:R|认可度|值)\s*[:：]?\s*([-\u2212+]?\s*\d+(?:\.\d+)?)$/))) { o.rRaw = Number(m[1].replace(/\u2212/, '-')); continue; }
@@ -2032,6 +2103,12 @@
       if ((m = x.match(/^(?:迹|足迹)\s*[:：]?\s*([\s\S]*)$/))) { o.trailRaw = m[1].trim(); continue; }
       if (o.rRaw == null && /^[-\u2212+]?\s*\d+(?:\.\d+)?$/.test(x)) { o.rRaw = Number(x.replace(/\u2212/, '-')); continue; }
     }
+    /* v3.55.0 · 三段（R／因／迹）缺一段本行作废。原先缺 R 就走默认 3、缺 因/迹 就静默留空：
+       世界书写着「缺一段作废」，面板却把半行当整行用 —— 玩家看到的是「难度按 3 走」，
+       而写的人以为写了 R=7。只在这一行**真的存在**时判（整行没写 = 旧卡，仍按默认 R=3，不报）。 */
+    if (o.rRaw == null) o.missing.push('R');
+    if (!o.reason) o.missing.push('因');
+    if (!o.trailRaw) o.missing.push('迹');
     return o;
   }
 
@@ -2959,7 +3036,12 @@
   }
 
   function renderMob(m) {
-    const g = /BOSS|Boss|首领|头目/.test(m.grade) ? 'g-boss' : (/精英/.test(m.grade) ? 'g-elite' : 'g-mob');
+    /* v3.55.0 · 阶级判定顺序 = 越级者先判。超规格在 BOSS 之上（世界书口径），先认它；
+       `超规格 BOSS` 这种叠写落到 g-spec，正是要表达的「比 BOSS 更高」。
+       判据认 class（g-spec/g-boss/g-elite/g-mob），不认文字 —— §7 第 27 条。 */
+    const g = /超规格/.test(m.grade) ? 'g-spec'
+      : (/BOSS|Boss|首领|头目/.test(m.grade) ? 'g-boss'
+      : (/精英/.test(m.grade) ? 'g-elite' : 'g-mob'));
     const pct = (m.hp != null && m.hpMax) ? Math.max(0, Math.min(100, Math.round(m.hp / m.hpMax * 100))) : 0;
     const hpTxt = m.hpUnknown ? '?/?' : (m.hp != null ? `${m.hp}/${m.hpMax}` : '');
     const sts = (m.status || []).filter(x => !/^(正常|无)$/.test(x));
@@ -3492,6 +3574,62 @@
         (k.pct == null ? '' : `（${k.pct}%）`) +
         (k.boss ? ' · BOSS 无处决机制' : '') + '</div>');
     }
+
+    /* ══ v3.55.0 · 五条「写了却没生效」的出口（②–⑥；① 超规格阶级走配色不走 warn 通道） ══
+       共同原则：不替模型改，也不猜它想写什么；只把「这一行世界书承诺了、面板没吃到」
+       这件事放到玩家眼前。四条都只在「该行真的存在」时判 —— 旧卡没有这些行 = 不是错，不报。 */
+
+    /* ② 双账本：lk 与 lock 同时在场。lk 画基因锁卡，lock 的心魔・超标・冷却没有落点。 */
+    if (st.dualLocks) {
+      const d = st.dualLocks;
+      log.push(`<div class="tc-dmg-warn tc-dualwarn">⚠ lk 与 lock 同时在场（lk ${esc(d.lk.join('、'))}／lock ${esc(d.lock.join('、'))}）`
+        + `——卡面只画 lk 那张卡，lock 的心魔・超标・冷却无处显示；世界书已把 lock 标为停写项，请并进 lk 一行</div>`);
+    }
+
+    /* ③ 判词不在六选一：着色/弱点判定全部静默失效，卡面却仍有一行「判」。 */
+    (st.dmgs || []).forEach(function (d) {
+      if (!d.verdictBad) return;
+      const who = (d.from || '?') + '→' + (d.to || '?');
+      log.push(`<div class="tc-dmg-warn tc-verdictwarn">⚠ 判「${esc(d.verdictBad)}」不在六选一（命中／暴击／闪避／格挡／破防／未破防）`
+        + `——这一刀的判定着色与弱点对账都没生效：${esc(who)}</div>`);
+    });
+
+    /* ④ ack 缺段：世界书写「缺一段本行作废」，面板却按默认 R=3 把它当整行用。 */
+    if (st.ack && st.ack.missing && st.ack.missing.length) {
+      log.push(`<div class="tc-dmg-warn tc-ackwarn">⚠ ack 行缺 ${esc(st.ack.missing.join('／'))} 段`
+        + `——世界书写明「缺一段本行作废」，面板仍按默认 R=3 计算难度与收益；请补齐 R／因／迹 三段</div>`);
+    }
+
+    /* ⑤ 有敌人/伤害却没有 pace 行：节奏整块退回默认值，而「相位超轮」「本场未出现高潮」
+       这两类提醒都不会触发 —— 玩家会以为这局节奏没问题。 */
+    if (paceStarted && !paceOf(st).present && (((st.mobs || []).length) || ((st.dmgs || []).length))) {
+      log.push('<div class="tc-dmg-warn tc-pacewarn">⚠ 有敌人或伤害行却没有 pace 行'
+        + '——相位／轮／张力／喘息全按默认显示（建置 · 张 3），相位超轮与本场未出现高潮两条提醒不会触发</div>');
+    }
+
+    /* ⑥ 敌人未结算：写了意图却没有 `敌：` 记录，或记录里没有结果词。
+       世界书写「只写意图不算行动」，面板原先不吭声 —— 这是玩家能拿到的唯一机器证据。 */
+    if (st.enemyAudit) {
+      if (st.enemyAudit.noSeg) {
+        log.push('<div class="tc-dmg-warn tc-enemywarn">⚠ 敌人本楼未结算（有 mob 行但 result 无 敌：）'
+          + '——只写意图不算行动</div>');
+      }
+      if ((st.enemyAudit.symbolic || []).length) {
+        const list = st.enemyAudit.symbolic.map(function (u) { return esc(u.name) + ' ' + u.dmg + ' 点'; }).join('／');
+        log.push('<div class="tc-dmg-warn tc-enemywarn tc-enemysoft">⚠ 伤害仅 1~2 点，疑象征性结算（' + list + '）'
+          + '——判定是 d100 对 DC 时，伤害须由判定档位推出；残血补刀／压制轻击可忽略本条</div>');
+      }
+      (st.enemyAudit.unsettled || []).forEach(function (u) {
+        const why = u.kind === 'B1'
+          ? '缺判定（须 1d100 对 DC／对抗／伤害骰）'
+          : (u.kind === 'B2'
+            ? '只写了未中／格挡／闪避，缺反抗结果（判定不产生效果＝这一刀没发生）'
+            : '只有动作，缺判定与结果');
+        log.push('<div class="tc-dmg-warn tc-enemywarn">⚠ 敌： 记录' + why
+          + '（' + esc(u.name) + '）——四段式：动作→目标 判定 结果</div>');
+      });
+    }
+
     (st.stateWarns || []).forEach(function (w) {
       const hpTxt = (w.max == null ? String(w.hp) : w.hp + '/' + w.max);
       const txt = w.why === 'near-high'
@@ -3965,6 +4103,24 @@
 .tc-mob.g-elite .tc-mob-bar i{background:linear-gradient(90deg,#92400e,#f59e0b 60%,#fde68a)}
 .tc-mob.g-elite .tc-mob-bar i,.tc-mob.g-boss .tc-mob-bar i{position:relative;overflow:hidden}
 .tc-mob.g-elite .tc-mob-bar i::after,.tc-mob.g-boss .tc-mob-bar i::after{content:'';position:absolute;top:0;bottom:0;left:0;width:40%;background:linear-gradient(105deg,transparent 15%,rgba(255,255,255,.45) 50%,transparent 85%);animation:tc-shine 2.6s linear infinite}
+/* v3.55.0 · g-spec「超规格」——越过阶级体系的目标。红(BOSS)/琥珀(精英)都已占用，
+   取紫青（越级=不属于这套颜色语义之外）＋扫描线，让它在任何一张卡上都先被看见。
+   与 g-boss 的差别：不只更大声，而是「不在同一套阶位里」——左缘双色、无 BOSS 红底纹。 */
+.tc-mob.g-spec{grid-column:1/-1;overflow:hidden;border:1px solid #a855f7;border-left:6px double #a855f7;background:linear-gradient(120deg,#120a1c 0%,#1e1030 45%,#0b1620 100%);clip-path:polygon(0 0,calc(100% - 18px) 0,100% 18px,100% 100%,18px 100%,0 calc(100% - 18px));padding:14px 17px 13px;animation:tc-specpulse 3.2s ease-in-out infinite}
+.tc-mob.g-spec::before{content:'';position:absolute;top:0;left:0;right:0;height:4px;background:repeating-linear-gradient(-55deg,#a855f7 0 10px,transparent 10px 20px,#22d3ee 20px 30px,transparent 30px 40px);opacity:.7;animation:tc-hazard 2s linear infinite}
+.tc-mob.g-spec::after{content:'超规格';position:absolute;right:8px;bottom:-10px;font-size:42px;font-weight:900;letter-spacing:4px;color:#a855f7;opacity:.08;pointer-events:none}
+.tc-mob.g-spec .tc-mob-name{font-size:18px;letter-spacing:1px;color:#f0e2ff;text-shadow:0 0 12px rgba(168,85,247,.85),0 0 30px rgba(34,211,238,.35)}
+.tc-mob.g-spec .tc-mob-grade{background:linear-gradient(90deg,#6d28d9,#a855f7 55%,#22d3ee);color:#fff;font-size:11px;padding:2px 10px;font-weight:800;letter-spacing:1px;box-shadow:0 0 8px rgba(168,85,247,.55)}
+.tc-mob.g-spec .tc-mob-grade::before{content:'Ψ '}
+.tc-mob.g-spec .tc-mob-hp{color:#d8b4fe;font-size:15px;font-weight:800}
+.tc-mob.g-spec .tc-mob-bar{height:10px;margin:7px 0 8px;background:#150d22;border-radius:2px}
+.tc-mob.g-spec .tc-mob-bar i{background:linear-gradient(90deg,#4c1d95,#a855f7 50%,#22d3ee 85%,#a7f3d0);position:relative;overflow:hidden}
+.tc-mob.g-spec .tc-mob-bar i::after{content:'';position:absolute;top:0;bottom:0;left:0;width:40%;background:linear-gradient(105deg,transparent 15%,rgba(255,255,255,.55) 50%,transparent 85%);animation:tc-shine 2.2s linear infinite}
+.tc-mob.g-spec .tc-mob-intent{font-size:13px;padding:5px 10px;border-left:3px solid #22d3ee;color:#cffafe;background:#0d1b26;font-weight:600}
+.tc-mob.g-spec .tc-mob-intent::before{content:'✦ '}
+.tc-mob.g-spec .tc-mattr{background:#1a1030;border-color:#4c1d95}
+.tc-mob.g-spec .tc-mattr b{color:#e9d5ff}
+@keyframes tc-specpulse{0%,100%{filter:drop-shadow(0 0 6px rgba(168,85,247,.35))}50%{filter:drop-shadow(0 0 16px rgba(34,211,238,.45))}}
 /* 低血量(<=25%)：血条急促闪烁告警 */
 .tc-mob.tc-lowhp .tc-mob-bar i{animation:tc-lowblink .7s steps(1) infinite}
 .tc-mob-hd{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
