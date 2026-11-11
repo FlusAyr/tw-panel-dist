@@ -1641,11 +1641,14 @@
       const hit = res.split(/(?=敌\s*[:：])/).filter(function (x) { return /^敌\s*[:：]/.test(x.trim()); });
       if (!hit.length) return { noSeg: true, unsettled: [] };
       /* 伤害结果：数字必须落在伤害位置，否则 `d100=34 vs DC70` 会把一切放行（假绿的老路） */
-      const DMG = /(?:命中|伤害|造成|扣|损失|掉)[^0-9]{0,6}[0-9]|[−\-–—－]\s*[0-9]+\s*(?:HP|SP|点)|\(\s*[−\-]\s*[0-9]+\s*\)/i;
+      /* 扣减位两种写法都要认：`−7 HP`（减号在前）与 `HP −7`（字段在前）。
+         后者是世界书 result 行的指针式写法（`… 见 [敌1]｜HP −7 落 dmg2`），
+         只认前者会让新格式全部落到 B2「有判定无结果」——假警报比漏报更贵。 */
+      const DMG = /(?:命中|伤害|造成|扣|损失|掉)[^0-9]{0,6}[0-9]|[−\-–—－]\s*[0-9]+\s*(?:HP|SP|点)|(?:HP|SP)\s*[−\-–—－]\s*[0-9]+|\(\s*[−\-]\s*[0-9]+\s*\)/i;
       /* 反抗结果闭集：命中/格挡/闪避 之外的「产生了变化」的词 */
       const RESIST = /压制|破防|眩晕|流血|失衡|缴械|被围|位移|侧移|击退|击飞|击倒|倒地|夺走|夺权|减速|减缓|僵直|沉默|封技|耗尽|牵制|逼退|撞飞|打落|打断|中断|破解/;
       /* B4 专用：伤害位上的数字本身。`d100=34 vs DC70` 里的 34/70 不算——只在伤害词后面抓。 */
-      const DMG_N = /(?:命中|伤害|造成|扣|损失|掉)[^0-9]{0,6}([0-9]+)/;
+      const DMG_N = /(?:命中|伤害|造成|扣|损失|掉)[^0-9]{0,6}([0-9]+)|(?:HP|SP)\s*[−\-–—－]\s*([0-9]+)/;
       const DIE = /\bd(?:4|6|8|10|12)\b|伤害骰/i;                    /* 伤害骰体系：1 点完全合法，不判 */
       const D100DC = /d100\s*[=＝]?\s*[0-9]+\s*(?:vs|VS|对)\s*DC/i;
       const unsettled = [];
@@ -1662,8 +1665,9 @@
            定为 WARN 不是 error：残血补刀、压制性轻击都合法，1 点伤害在规则上没错。
            每楼聚合成一条，避免一屏多行把 ⚠ 变成背景噪音。 */
         const dn = body.match(DMG_N);
-        if (dn && D100DC.test(body) && !DIE.test(body) && (+dn[1] === 1 || +dn[1] === 2)) {
-          symbolic.push({ name: nm, dmg: +dn[1] });
+        const dnV = dn ? +(dn[1] || dn[2]) : null;
+        if (dnV != null && D100DC.test(body) && !DIE.test(body) && (dnV === 1 || dnV === 2)) {
+          symbolic.push({ name: nm, dmg: dnV });
         }
       });
       if (!unsettled.length && !symbolic.length) return null;
