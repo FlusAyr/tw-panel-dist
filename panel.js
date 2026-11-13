@@ -9,7 +9,7 @@
   if (window.__twCardLoaded) return;
   window.__twCardLoaded = true;
 
-  const VERSION = '3.55.0';
+  const VERSION = '3.56.0';
 
   /* 面板尺寸偏好：紧凑(tc-mini)/完整。localStorage 持久化，点击 .tc-size 全局切换 */
   const SIZE_KEY = 'tw-card:size';
@@ -1962,14 +1962,19 @@
     const cells = [];
 
     /* 纹：累计百分比 → 数字 + 40px 小进度条（三点阵表达不了 100% 的进度，已废）。
-       ≥100% 时条填满并加一句「→ 下次必开」；旧写法（N 道）留一行轻提示，不是错误。 */
+       必开线是 **3 道 = 300%**：纹 是计数、不进成功率算式，满 3 道下一次必开。
+       条按 300% 归一化，并把「几道 / 3」直接写出来 —— 只给百分比，玩家没法判断离必开还有多远。
+       （v3.56 改：旧版按 100% 归一化，纹 106% 就报「已满 · 下次必开」，等于 1 道就满，与规则差 3 倍。）
+       旧写法（N 道）留一行轻提示，不是错误。 */
     if (l.marks != null) {
-      const pct = Math.max(0, Math.min(100, l.marks));
-      const mbar = `<span class="tc-lk-mbar" title="纹 ${pct}%"><i style="width:${pct}%"></i></span>`;
+      const dao = Math.floor(Math.max(0, l.marks) / 100);
+      const pct = Math.round(Math.max(0, Math.min(100, l.marks / 3)) * 100) / 100;
+      const mbar = `<span class="tc-lk-mbar" title="纹 ${Math.round(l.marks * 10) / 10}%（${dao} / 3 道，满 3 道下次必开）"><i style="width:${pct}%"></i></span>`;
       const legacy = l.marksLegacy != null
         ? `<em class="tc-lk-note">旧写法 纹 ${l.marksLegacy}，按 ${l.marks}% 计</em>` : '';
-      const must = l.marks >= 100
-        ? `<em class="tc-lk-note must">${l.marks > 100 ? '已满 · 下次必开' : '&rarr; 下次必开'}</em>` : '';
+      const must = l.marks >= 300
+        ? `<em class="tc-lk-note must">3 道 · 下次必开</em>`
+        : `<em class="tc-lk-note dao">${dao} / 3 道</em>`;
       cells.push(`<span class="tc-lk-cell"><i class="tc-lk-k">纹</i><b class="tc-lk-v">${Math.round(l.marks * 10) / 10}%</b>${mbar}${legacy}${must}</span>`);
     } else cells.push('<span class="tc-lk-cell miss"><i class="tc-lk-k">纹</i><b class="tc-lk-v">—</b></span>');
 
