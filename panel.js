@@ -9,7 +9,7 @@
   if (window.__twCardLoaded) return;
   window.__twCardLoaded = true;
 
-  const VERSION = '3.58.0';
+  const VERSION = '3.59.0';
 
   /* 面板尺寸偏好：紧凑(tc-mini)/完整。localStorage 持久化，点击 .tc-size 全局切换 */
   const SIZE_KEY = 'tw-card:size';
@@ -287,6 +287,28 @@
       out.push({ k: m[1].toUpperCase(), base, persist: st.persist, temp: st.temp, add: total - base, total, over: !!m[4] });
     }
     return out;
+  }
+
+  /* 复合攻/守值（v3.59.0，口径＝世界书【对抗复合值·七维折算】）：
+     主属性＝七维最高项全额（同高按 STR→DEX→CON→INT→PER→CHA→WIL 取最前者）；其余六项按攻/守倍率表取整折算。
+     七维不全不显示——折一半比不算更误导；技能/敌档明写属性对抗的走特例法（世界书铁律），面板照抄不折算。 */
+  const CV_ATK_DIV = { STR: 10, DEX: 10, CON: 10, INT: 5, PER: 5, CHA: 10, WIL: 10 };
+  const CV_DEF_DIV = { STR: 5, DEX: 5, CON: 5, INT: 5, PER: 10, CHA: 10, WIL: 10 };
+  function compoundVals(attrs) {
+    if (!attrs || attrs.length < 7) return null;
+    const by = {};
+    for (const a of attrs) if (by[a.k] == null) by[a.k] = a.total;
+    for (const k of ATTR_ORDER) if (by[k] == null) return null;
+    const main = ATTR_ORDER.reduce((x, y) => by[y] > by[x] ? y : x);
+    let atk = 0, def = 0;
+    const pa = [main + ' ' + by[main] + '全额'], pd = [main + ' ' + by[main] + '全额'];
+    for (const k of ATTR_ORDER) {
+      if (k === main) { atk += by[k]; def += by[k]; continue; }
+      const a = Math.floor(by[k] / CV_ATK_DIV[k]), d = Math.floor(by[k] / CV_DEF_DIV[k]);
+      atk += a; def += d;
+      pa.push(k + ' ' + a); pd.push(k + ' ' + d);
+    }
+    return { atk: atk, def: def, main: main, tipA: '攻＝' + pa.join('＋'), tipD: '守＝' + pd.join('＋') };
   }
 
   /* 衍生数值（MOV/DB）同款三段表达式（v3.58.0）：`MOV 12+2-1=13`、`DB 14+3`。
@@ -802,6 +824,7 @@
     /* 负重优先用小数段；没有小数段才退回第三个整数比值 */
     if (floats.length) o.weight = floats[0];
     else if (ratios.length >= 3) o.weight = ratios[2];
+    o.cv = compoundVals(o.attrs);   /* v3.59.0 复合攻/守值 */
     return o;
   }
 
@@ -1266,6 +1289,7 @@
       }
     }
     if (!o.armor) o.armor = '0';
+    o.cv = compoundVals(o.attrs);   /* v3.59.0 复合攻/守值 */
     return o;
   }
 
@@ -2975,6 +2999,7 @@
         ${p.weight ? `<div class="tc-vit"><span>📦 负重</span><b>${p.weight.cur}/${p.weight.max}</b>${bar(p.weight.cur, p.weight.max, 'wt')}</div>` : ''}
       </div>
       <div class="tc-nums">
+        ${p.cv ? `<span class="tc-cva" title="${p.cv.tipA}">🗡 攻·${p.cv.main} <b>${p.cv.atk}</b></span><span class="tc-cvd" title="${p.cv.tipD}">🛡 守·${p.cv.main} <b>${p.cv.def}</b></span>` : ''}
         ${p.mov != null ? `<span>🏃 MOV ${numHtml(p.mov)}</span>` : ''}
         ${p.db != null ? `<span>⚔️ DB ${numHtml(p.db)}</span>` : ''}
         ${p.weapon ? `<span class="tc-wpn">${esc(p.weapon)}</span>` : ''}
@@ -3112,6 +3137,7 @@
     const hpTxt = m.hpUnknown ? '?/?' : (m.hp != null ? `${m.hp}/${m.hpMax}` : '');
     const sts = (m.status || []).filter(x => !/^(正常|无)$/.test(x));
     const attrs = (m.attrs || []).slice().sort((a, b) => ATTR_ORDER.indexOf(a.k) - ATTR_ORDER.indexOf(b.k));
+    const cv = compoundVals(attrs);   /* v3.59.0 七维齐全才显示 */
     const attrRow = attrs.length
       ? `<div class="tc-mattrs">${attrs.map(a => `<span class="tc-mattr"><i>${esc(a.k)}</i><b>${a.total}</b>${a.persist ? `<u class="prs">${segSign(a.persist)}</u>` : ''}${a.temp ? `<u class="tmp">${segSign(a.temp)}</u>` : ''}</span>`).join('')}</div>`
       : (m.attrsUnknown ? `<div class="tc-mattrs"><span class="tc-mattr unk"><i>七维</i><b>未知</b></span></div>` : '');
@@ -3124,6 +3150,7 @@
       </div>
       ${hpTxt ? `<div class="tc-mob-bar"><i style="width:${pct}%"></i></div>` : ''}
       ${attrRow}
+      ${cv ? `<div class="tc-mob-cv" title="${cv.tipA} ｜ ${cv.tipD}">🗡 攻 <b>${cv.atk}</b> ｜ 🛡 守 <b>${cv.def}</b></div>` : ''}
       <div class="tc-mob-meta">
         <span class="tc-mob-armor">🛡 ${esc(m.armor)}</span>
         ${sts.map(x => `<span class="tc-mob-st">${esc(x)}</span>`).join('')}
@@ -4311,6 +4338,13 @@
 .tc-nums small.prs{color:#4ade80}
 .tc-nums small.tmp{color:#60a5fa}
 .tc-nums b.tt{font-weight:600;color:#e2ecf8}
+/* v3.59.0 复合攻/守值（世界书七维折算口径）：攻琥珀 / 守青；hover 出折算明细 */
+.tc-nums .tc-cva{color:#d9a04c}
+.tc-nums .tc-cva b{color:#ffd27a;font-weight:600}
+.tc-nums .tc-cvd{color:#7ab8ac}
+.tc-nums .tc-cvd b{color:#a7e6d7;font-weight:600}
+.tc-mob-cv{font-size:10.5px;color:#94a3b8;padding:2px 0 1px}
+.tc-mob-cv b{color:#ffd27a;font-weight:600}
 .tc-pen{font-size:11.5px;color:#f8a5a5;background:rgba(248,113,113,.07);border-radius:5px;padding:2px 8px}
 .tc-tags{display:flex;flex-wrap:wrap;gap:4px}
 .tc-tags span{font-size:10.5px;color:#a9b8cc;background:rgba(255,255,255,.06);border-radius:5px;padding:1px 7px}
