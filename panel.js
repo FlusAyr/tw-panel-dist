@@ -9,7 +9,7 @@
   if (window.__twCardLoaded) return;
   window.__twCardLoaded = true;
 
-  const VERSION = '3.56.0';
+  const VERSION = '3.57.0';
 
   /* 面板尺寸偏好：紧凑(tc-mini)/完整。localStorage 持久化，点击 .tc-size 全局切换 */
   const SIZE_KEY = 'tw-card:size';
@@ -245,17 +245,27 @@
 
   /* ══════════ 解析 ══════════ */
 
-  const ATTR_RE = /(STR|DEX|CON|INT|PER|CHA|WIL)\s*(-?\d+)(?:\s*\+\s*(-?\d+))?\s*(?:=\s*(\d+))?\s*(⚡)?/gi;
+  /* 属性串允许任意段数的加减连写（v3.57.0）：`STR 10+50+14+35=109⚡`、`CHA 51+50-15=86`。
+     旧正则只认一段加号（基础+加值），多段时 `=总值` 与 ⚡ 全被丢弃，面板画出 base+第一段 的错值。
+     总值优先信 `=` 后面的数（写错是模型的账，面板照抄）；没写 `=` 就按各段加减求和。
+     减号段（`-15`）并入 add：add = 总值 − 基础，保证 卡面 base+add === total 恒成立。 */
+  const ATTR_OP = '[-+−＋－]';                      /* 运算符：半角减加 + 全角－＋ + 数学减号 − */
+  const ATTR_NUM = '(?:[-−－]?\\d+)';               /* 数字：可带前置负号（三种写法） */
+  const ATTR_RE = new RegExp('(STR|DEX|CON|INT|PER|CHA|WIL)\\s*(' + ATTR_NUM + '(?:\\s*' + ATTR_OP + '\\s*' + ATTR_NUM + ')*)\\s*(?:=\\s*(\\d+))?\\s*(⚡)?', 'gi');
   const ATTR_ORDER = ['STR', 'DEX', 'CON', 'INT', 'PER', 'CHA', 'WIL'];
-  const ATTR_STRIP_RE = /(STR|DEX|CON|INT|PER|CHA|WIL)\s*-?\d+(?:\s*\+\s*-?\d+)?(?:\s*=\s*\d+)?\s*(?:⚡)?/gi;
+  const ATTR_STRIP_RE = new RegExp('(STR|DEX|CON|INT|PER|CHA|WIL)\\s*' + ATTR_NUM + '(?:\\s*' + ATTR_OP + '\\s*' + ATTR_NUM + ')*(?:\\s*=\\s*\\d+)?\\s*(?:⚡)?', 'gi');
 
   function parseAttrs(x) {
     const out = [];
     ATTR_RE.lastIndex = 0;
     let m;
     while ((m = ATTR_RE.exec(x)) !== null) {
-      const base = +m[2], add = m[3] ? +m[3] : 0;
-      out.push({ k: m[1].toUpperCase(), base, add, total: m[4] ? +m[4] : base + add, over: !!m[5] });
+      /* 表达式按运算符切开再逐段取数：`10+50-15` → [10, 50, -15]，负号跟着数走 */
+      const nums = (m[2] || '').replace(/[−－]/g, '-').match(/-?\d+/g) || [];
+      const base = nums.length ? +nums[0] : 0;
+      const sum = nums.reduce((a, b) => a + (+b), 0);
+      const total = m[3] != null ? +m[3] : sum;
+      out.push({ k: m[1].toUpperCase(), base, add: total - base, total, over: !!m[4] });
     }
     return out;
   }
