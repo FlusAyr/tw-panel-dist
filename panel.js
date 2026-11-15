@@ -9,7 +9,7 @@
   if (window.__twCardLoaded) return;
   window.__twCardLoaded = true;
 
-  const VERSION = '3.57.0';
+  const VERSION = '3.58.0';
 
   /* 面板尺寸偏好：紧凑(tc-mini)/完整。localStorage 持久化，点击 .tc-size 全局切换 */
   const SIZE_KEY = 'tw-card:size';
@@ -248,12 +248,30 @@
   /* 属性串允许任意段数的加减连写（v3.57.0）：`STR 10+50+14+35=109⚡`、`CHA 51+50-15=86`。
      旧正则只认一段加号（基础+加值），多段时 `=总值` 与 ⚡ 全被丢弃，面板画出 base+第一段 的错值。
      总值优先信 `=` 后面的数（写错是模型的账，面板照抄）；没写 `=` 就按各段加减求和。
-     减号段（`-15`）并入 add：add = 总值 − 基础，保证 卡面 base+add === total 恒成立。 */
+     减号段（`-15`）并入 add：add = 总值 − 基础，保证 卡面 base+add === total 恒成立。
+
+     三段着色（v3.58.0）：段1=本体（白）｜段2=持久加值·血统/装备（绿）｜段3起=临时·状态类增减（蓝）。
+     负号段语义上是临时减益，不给它占绿色槽：段2 为负时 persist 归 0、该负段及其后全部并入 temp。
+     `61+10-5` → 白61 绿10 蓝−5；`61-5` → 白61 蓝−5；`10+50+14+35` → 白10 绿50 蓝49（第3段起求和）。 */
   const ATTR_OP = '[-+−＋－]';                      /* 运算符：半角减加 + 全角－＋ + 数学减号 − */
   const ATTR_NUM = '(?:[-−－]?\\d+)';               /* 数字：可带前置负号（三种写法） */
   const ATTR_RE = new RegExp('(STR|DEX|CON|INT|PER|CHA|WIL)\\s*(' + ATTR_NUM + '(?:\\s*' + ATTR_OP + '\\s*' + ATTR_NUM + ')*)\\s*(?:=\\s*(\\d+))?\\s*(⚡)?', 'gi');
   const ATTR_ORDER = ['STR', 'DEX', 'CON', 'INT', 'PER', 'CHA', 'WIL'];
-  const ATTR_STRIP_RE = new RegExp('(STR|DEX|CON|INT|PER|CHA|WIL)\\s*' + ATTR_NUM + '(?:\\s*' + ATTR_OP + '\\s*' + ATTR_NUM + ')*(?:\\s*=\\s*\\d+)?\\s*(?:⚡)?', 'gi');
+  const ATTR_STRIP_RE = new RegExp('(STR|DEX|CON|INT|PER|CHA|WIL)\\s*' + ATTR_NUM + '(?:\\s*' + ATTR_OP + '\\s*' + ATTR_NUM + ')*(?:\\s*=\\s*\\d+)?\\s*(⚡)?', 'gi');
+
+  /* 三段切分：段2 为正 → persist，其后全部 temp；段2 为负 → persist=0，段2起全部 temp。 */
+  function splitSegs(nums) {
+    let persist = 0, temp = 0;
+    if (nums.length > 1) {
+      if (+nums[1] >= 0) {
+        persist = +nums[1];
+        temp = nums.slice(2).reduce((a, b) => a + (+b), 0);
+      } else {
+        temp = nums.slice(1).reduce((a, b) => a + (+b), 0);
+      }
+    }
+    return { persist: persist, temp: temp };
+  }
 
   function parseAttrs(x) {
     const out = [];
@@ -265,9 +283,24 @@
       const base = nums.length ? +nums[0] : 0;
       const sum = nums.reduce((a, b) => a + (+b), 0);
       const total = m[3] != null ? +m[3] : sum;
-      out.push({ k: m[1].toUpperCase(), base, add: total - base, total, over: !!m[4] });
+      const st = splitSegs(nums);
+      out.push({ k: m[1].toUpperCase(), base, persist: st.persist, temp: st.temp, add: total - base, total, over: !!m[4] });
     }
     return out;
+  }
+
+  /* 衍生数值（MOV/DB）同款三段表达式（v3.58.0）：`MOV 12+2-1=13`、`DB 14+3`。
+     旧写法 `MOV 12` 照旧单段返回；渲染端纯数字走旧路径，不破坏旧卡。 */
+  function parseNumExpr(x, kw) {
+    const re = new RegExp(kw + '\\s*(' + ATTR_NUM + '(?:\\s*' + ATTR_OP + '\\s*' + ATTR_NUM + ')*)\\s*(?:=\\s*(\\d+))?', 'i');
+    const m = String(x).match(re);
+    if (!m) return null;
+    const nums = (m[1] || '').replace(/[−－]/g, '-').match(/-?\d+/g) || [];
+    if (!nums.length) return null;
+    const base = +nums[0];
+    const st = splitSegs(nums);
+    const total = m[2] != null ? +m[2] : base + st.persist + st.temp;
+    return { base: base, persist: st.persist, temp: st.temp, total: total };
   }
 
   const HEALTH = /^(健康|正常|完好|轻伤|中伤|重伤|濒死)$/;
@@ -732,11 +765,11 @@
       if (/^\d+\.\d+\s*\/\s*\d+(?:\.\d+)?\s*(kg)?$/i.test(x) || /^\d+\s*\/\s*\d+\.\d+\s*(kg)?$/i.test(x)) { floats.push(pairNum(x)); continue; }
 
       const at = parseAttrs(x);
-      const mv = x.match(/MOV\s*(\d+)/i), db = x.match(/\bDB\s*(\d+)/i);
+      const mv = parseNumExpr(x, 'MOV'), db = parseNumExpr(x, '\\bDB');
       if (at.length || mv || db) {
         o.attrs.push(...at);
-        if (mv) o.mov = +mv[1];
-        if (db) o.db = +db[1];
+        if (mv) o.mov = mv;
+        if (db) o.db = db;
         continue;
       }
 
@@ -1696,14 +1729,28 @@
     return `<div class="tc-bar"><i class="${cls}" style="width:${pct}%"></i></div>`;
   };
 
+  /* 三段着色（v3.58.0）：本体白 / 持久加值（血统·装备）绿 / 临时（状态类增减）蓝。
+     段缺省不画——临时为 0 就没有蓝字，不是画个 +0 占位。 */
+  const segSign = (v) => (v >= 0 ? '+' : '') + v;
   function renderAttrs(list) {
     if (!list.length) return '';
     return `<div class="tc-attrs">${list.map(a => `
       <div class="tc-attr${a.over ? ' ov' : ''}">
         <span class="tc-ak">${ATTR_ICON[a.k] || ''}${a.k}</span>
-        <span class="tc-av">${a.base}${a.add ? `<small>+${a.add}</small>` : ''}</span>
+        <span class="tc-av"><b>${a.base}</b>${a.persist ? `<small class="prs">${segSign(a.persist)}</small>` : ''}${a.temp ? `<small class="tmp">${segSign(a.temp)}</small>` : ''}</span>
         <b class="tc-at">${a.total}</b>
       </div>`).join('')}</div>`;
+  }
+
+  /* 衍生数值（MOV/DB）三段渲染：与属性同款白/绿/蓝。纯数字（旧卡无段写法）照旧裸显示。 */
+  function numHtml(n) {
+    if (n == null) return '';
+    if (typeof n === 'number') return String(n);
+    let s = `${n.base}`;
+    if (n.persist) s += `<small class="prs">${segSign(n.persist)}</small>`;
+    if (n.temp) s += `<small class="tmp">${segSign(n.temp)}</small>`;
+    if (n.persist || n.temp) s += `<b class="tt"> = ${n.total}</b>`;
+    return s;
   }
 
   /* 读数组件：机甲与使魔共用一只（同一件事不写第二遍）。
@@ -2928,8 +2975,8 @@
         ${p.weight ? `<div class="tc-vit"><span>📦 负重</span><b>${p.weight.cur}/${p.weight.max}</b>${bar(p.weight.cur, p.weight.max, 'wt')}</div>` : ''}
       </div>
       <div class="tc-nums">
-        ${p.mov != null ? `<span>🏃 MOV ${p.mov}</span>` : ''}
-        ${p.db != null ? `<span>⚔️ DB ${p.db}</span>` : ''}
+        ${p.mov != null ? `<span>🏃 MOV ${numHtml(p.mov)}</span>` : ''}
+        ${p.db != null ? `<span>⚔️ DB ${numHtml(p.db)}</span>` : ''}
         ${p.weapon ? `<span class="tc-wpn">${esc(p.weapon)}</span>` : ''}
       </div>
       ${p.penalty ? `<div class="tc-pen">🩸 ${esc(p.penalty)}</div>` : ''}
@@ -3066,7 +3113,7 @@
     const sts = (m.status || []).filter(x => !/^(正常|无)$/.test(x));
     const attrs = (m.attrs || []).slice().sort((a, b) => ATTR_ORDER.indexOf(a.k) - ATTR_ORDER.indexOf(b.k));
     const attrRow = attrs.length
-      ? `<div class="tc-mattrs">${attrs.map(a => `<span class="tc-mattr"><i>${esc(a.k)}</i><b>${a.total}</b>${a.add ? `<u>+${a.add}</u>` : ''}</span>`).join('')}</div>`
+      ? `<div class="tc-mattrs">${attrs.map(a => `<span class="tc-mattr"><i>${esc(a.k)}</i><b>${a.total}</b>${a.persist ? `<u class="prs">${segSign(a.persist)}</u>` : ''}${a.temp ? `<u class="tmp">${segSign(a.temp)}</u>` : ''}</span>`).join('')}</div>`
       : (m.attrsUnknown ? `<div class="tc-mattrs"><span class="tc-mattr unk"><i>七维</i><b>未知</b></span></div>` : '');
     const low = (pct > 0 && pct <= 25) ? ' tc-lowhp' : '';
     return `<div class="tc-mob ${g}${low}">
@@ -4155,6 +4202,7 @@
 .tc-mattr b{font-size:12px;color:#e8c9ce;font-weight:700;white-space:nowrap}
 .tc-mattr b{font-size:12.5px;color:#e8c9ce;font-weight:700}
 .tc-mattr u{text-decoration:none;font-size:9px;color:#7dd3a8}
+.tc-mattr u.tmp{color:#60a5fa}
 .tc-mattr.unk{opacity:.55}
 .tc-mattrs .tc-mattr:only-child{grid-column:1/-1}
 .tc-mob-meta{display:flex;flex-wrap:wrap;gap:4px 9px;font-size:11.5px;color:#a89096;margin-bottom:5px;align-items:center}
@@ -4225,7 +4273,11 @@
   font-size:11.5px;padding:2px 0;border-bottom:1px solid rgba(255,255,255,.045);min-width:0}
 .tc-ak{color:var(--dim);font-size:9.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tc-av{color:#94a3b8;font-weight:400;white-space:nowrap;font-size:11px}
-.tc-av small{font-size:8.5px;color:#4ade80}
+/* v3.58.0 三段属性：本体白 / 持久加值（血统·装备）绿 / 临时（状态类）蓝 */
+.tc-av>b{color:#e2ecf8;font-weight:600;font-size:11.5px}
+.tc-av small{font-size:8.5px}
+.tc-av small.prs{color:#4ade80}
+.tc-av small.tmp{color:#60a5fa}
 .tc-at{font-weight:700;color:#e2ecf8;justify-self:end;font-size:12.5px;white-space:nowrap}
 .tc-at::before{content:"= ";color:#3f4d61;font-weight:400;font-size:10px}
 .tc-attr.ov .tc-at{color:var(--gold)}
@@ -4254,6 +4306,11 @@
 
 .tc-nums{display:flex;flex-wrap:wrap;gap:3px 12px;font-size:11.5px;color:#b9c6d8}
 .tc-nums .tc-wpn{color:#c4b5fd}
+/* v3.58.0 MOV/DB 三段：白本体 + 绿持久 + 蓝临时；有段才画 = 总值 */
+.tc-nums small{font-size:9px}
+.tc-nums small.prs{color:#4ade80}
+.tc-nums small.tmp{color:#60a5fa}
+.tc-nums b.tt{font-weight:600;color:#e2ecf8}
 .tc-pen{font-size:11.5px;color:#f8a5a5;background:rgba(248,113,113,.07);border-radius:5px;padding:2px 8px}
 .tc-tags{display:flex;flex-wrap:wrap;gap:4px}
 .tc-tags span{font-size:10.5px;color:#a9b8cc;background:rgba(255,255,255,.06);border-radius:5px;padding:1px 7px}
