@@ -9,7 +9,7 @@
   if (window.__twCardLoaded) return;
   window.__twCardLoaded = true;
 
-  const VERSION = '3.59.0';
+  const VERSION = '3.60.0';
 
   /* 面板尺寸偏好：紧凑(tc-mini)/完整。localStorage 持久化，点击 .tc-size 全局切换 */
   const SIZE_KEY = 'tw-card:size';
@@ -311,8 +311,10 @@
     return { atk: atk, def: def, main: main, tipA: '攻＝' + pa.join('＋'), tipD: '守＝' + pd.join('＋') };
   }
 
-  /* 衍生数值（MOV/DB）同款三段表达式（v3.58.0）：`MOV 12+2-1=13`、`DB 14+3`。
-     旧写法 `MOV 12` 照旧单段返回；渲染端纯数字走旧路径，不破坏旧卡。 */
+  /* 衍生数值同款三段表达式（v3.58.0）：`MOV 12+2-1=13`、`DB 14+3`。
+     旧写法 `MOV 12` 照旧单段返回；渲染端纯数字走旧路径，不破坏旧卡。
+     v3.60.0 起同款机器再吃三个键（kw 为正则源，中英都认）：
+     DR/减伤、SHD/护盾、AMP/增伤 —— 与 MOV/DB 完全同构的三段与渲染待遇。 */
   function parseNumExpr(x, kw) {
     const re = new RegExp(kw + '\\s*(' + ATTR_NUM + '(?:\\s*' + ATTR_OP + '\\s*' + ATTR_NUM + ')*)\\s*(?:=\\s*(\\d+))?', 'i');
     const m = String(x).match(re);
@@ -772,7 +774,7 @@
     const p = seg(v);
     const o = {
       name: p[0] || '', badge: '', hp: null, sp: null, weight: null,
-      mov: null, db: null, attrs: [], penalty: '', status: [],
+      mov: null, db: null, dr: null, shd: null, amp: null, attrs: [], penalty: '', status: [],
       pts: '', sub: '', blood: '', lock: '', title: '', weapon: '',
     };
     const ratios = [];
@@ -788,10 +790,16 @@
 
       const at = parseAttrs(x);
       const mv = parseNumExpr(x, 'MOV'), db = parseNumExpr(x, '\\bDB');
-      if (at.length || mv || db) {
+      /* v3.60.0 防御/增益三键（与 MOV/DB 同构）：DR/减伤、SHD/护盾、AMP/增伤。
+         键在数字前面才认——「无视2点减伤」这类倒装文本不中招，照旧走武器/状态路径。 */
+      const dr = parseNumExpr(x, '(?:\\bDR\\b|减伤)'), shd = parseNumExpr(x, '(?:\\bSHD\\b|护盾|盾)'), amp = parseNumExpr(x, '(?:\\bAMP\\b|增伤)');
+      if (at.length || mv || db || dr || shd || amp) {
         o.attrs.push(...at);
         if (mv) o.mov = mv;
         if (db) o.db = db;
+        if (dr) o.dr = dr;
+        if (shd) o.shd = shd;
+        if (amp) o.amp = amp;
         continue;
       }
 
@@ -3002,6 +3010,9 @@
         ${p.cv ? `<span class="tc-cva" title="${p.cv.tipA}">🗡 攻·${p.cv.main} <b>${p.cv.atk}</b></span><span class="tc-cvd" title="${p.cv.tipD}">🛡 守·${p.cv.main} <b>${p.cv.def}</b></span>` : ''}
         ${p.mov != null ? `<span>🏃 MOV ${numHtml(p.mov)}</span>` : ''}
         ${p.db != null ? `<span>⚔️ DB ${numHtml(p.db)}</span>` : ''}
+        ${p.dr != null ? `<span class="tc-dr" title="减伤：绝对点数（护甲+被动常驻），结算时从原始伤害里扣，最低扣到 1">🪨 减伤 ${numHtml(p.dr)}</span>` : ''}
+        ${p.shd != null ? `<span class="tc-shd" title="护盾：独立缓冲池（点数），先于 HP 扣、扣完即散，多源各记各账">🛡 护盾 ${numHtml(p.shd)}</span>` : ''}
+        ${p.amp != null ? `<span class="tc-amp" title="增伤：造成的伤害加值（武器/技能/状态），结算时在攻击侧加上">💥 增伤 ${numHtml(p.amp)}</span>` : ''}
         ${p.weapon ? `<span class="tc-wpn">${esc(p.weapon)}</span>` : ''}
       </div>
       ${p.penalty ? `<div class="tc-pen">🩸 ${esc(p.penalty)}</div>` : ''}
@@ -4345,6 +4356,13 @@
 .tc-nums .tc-cvd b{color:#a7e6d7;font-weight:600}
 .tc-mob-cv{font-size:10.5px;color:#94a3b8;padding:2px 0 1px}
 .tc-mob-cv b{color:#ffd27a;font-weight:600}
+/* v3.60.0 防御/增益三键（DR/SHD/AMP，MOV/DB 同行）：减伤青灰 / 护盾蓝 / 增伤橘红 */
+.tc-nums .tc-dr{color:#9db4c0}
+.tc-nums .tc-dr b{color:#c3d9e3;font-weight:600}
+.tc-nums .tc-shd{color:#7ea8d8}
+.tc-nums .tc-shd b{color:#a9cdef;font-weight:600}
+.tc-nums .tc-amp{color:#e08a6d}
+.tc-nums .tc-amp b{color:#ffb59d;font-weight:600}
 .tc-pen{font-size:11.5px;color:#f8a5a5;background:rgba(248,113,113,.07);border-radius:5px;padding:2px 8px}
 .tc-tags{display:flex;flex-wrap:wrap;gap:4px}
 .tc-tags span{font-size:10.5px;color:#a9b8cc;background:rgba(255,255,255,.06);border-radius:5px;padding:1px 7px}
