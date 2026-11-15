@@ -9,7 +9,7 @@
   if (window.__twCardLoaded) return;
   window.__twCardLoaded = true;
 
-  const VERSION = '3.60.0';
+  const VERSION = '3.61.0';
 
   /* 面板尺寸偏好：紧凑(tc-mini)/完整。localStorage 持久化，点击 .tc-size 全局切换 */
   const SIZE_KEY = 'tw-card:size';
@@ -2270,6 +2270,8 @@
      不折的话它会当成一个名字 → 未识别黄字 + 参与计数（`用` 从 1 变 2）。
      一个每次都会出现的警告等于训练玩家无视黄字（§7 第 27 条）。 */
   const NAME_PLACEHOLDER = /^(无|没有|空|—|–|-|none|null)$/i;
+  /* 满侧速记：`解 全`＝正树十枚全亮（v3.61.0，世界书同口径） */
+  const KBL_FULL_RE = /^(全|满|全部|all)$/i;
   const nameList = (s) => String(s || '').split(/[\s、,，·]+/).filter(Boolean).filter(x => !NAME_PLACEHOLDER.test(x));
   const shade = (hex, f) => {
     const n = parseInt(String(hex).replace('#', ''), 16);
@@ -2290,6 +2292,12 @@
     const m = {};
     Object.keys(KBL_EN).forEach(cn => { m[KBL_EN[cn]] = cn; });
     Object.keys(KBL_EN_INV).forEach(cn => { m[KBL_EN_INV[cn]] = cn; });
+    /* v3.61.0 口径统一：世界书 kbl 行改写英文质点名（与 uid38 显形条同拼法）。
+       世界书中文叫「根基」，渲染器内部位名是「基础」（Yesod）——一字之差曾整枚判未识别；
+       顺带收录常见拼法变体（Kether/Chokmah/Tiphareth…），旧卡中文名照旧全认。 */
+    m['根基'] = '基础';
+    m['Kether'] = '王冠'; m['Chokmah'] = '智慧'; m['Chochmah'] = '智慧';
+    m['Tiphareth'] = '美'; m['Tiphereth'] = '美'; m['Daat'] = '王冠';
     return m;
   })();
   const kblNorm = (n) => {
@@ -2407,8 +2415,9 @@
       const k = m[1], val = (m[2] || '').trim();
       if (k === '树') { if (/^(正|逆|双)$/.test(val)) o.tree = val; else o.errs.push('树 只认 正/逆/双：' + val); }
       else if (k === '阶') o.stage = val;                    /* 不透明字符串，原样显示 */
-      else if (k === '解') { o.slots = parseYzSlots(val); o.solved = o.slots.map(x => kblNorm(x.name)); }
-      else if (k === '逆') o.inversed = nameList(val).map(kblNorm);
+      /* v3.61.0 「全」速记：满侧写 `解 全` / `逆 全`，面板展开成十枚——全解锁不用挨个记名字 */
+      else if (k === '解') { o.slots = KBL_FULL_RE.test(val) ? KBL_ORDER.map(n => ({ name: n, pts: null })) : parseYzSlots(val); o.solved = o.slots.map(x => kblNorm(x.name)); }
+      else if (k === '逆') o.inversed = KBL_FULL_RE.test(val) ? KBL_ORDER.slice() : nameList(val).map(kblNorm);
       else if (k === '激') o.actRaw = val;                  /* 槽数面板按阶算，不采信写法 */
       else if (k === '用') o.usedRaw = val;                  /* 面板重算，不采信写法 */
       else if (k === '天') {
@@ -2449,7 +2458,9 @@
     o.inversed = o.inversed.filter(n => { if (KBL_ORDER.indexOf(n) < 0) { seen.add(n); return false; } return true; });
     o.bad = [...seen];
     const uniq = new Set(o.solved.concat(o.inversed));
-    o.used = uniq.size;
+    /* v3.61.0 口径修正：用＝解+逆 总数（世界书原文），同一树位的正/逆两形态各占一格、共 20 格——
+       旧算法 uniq.size 把「Keter+Thaumiel 都吞」折成 1，全解锁只显示 10/20。 */
+    o.used = new Set(o.solved).size + new Set(o.inversed).size;
     o.total = KBL_TOTAL;
 
     /* 激 段：`激 3/3 王冠 智慧 理解`（M 由面板按阶算；`激 0/3` 后面什么都不跟，这一段不许省）
@@ -2461,13 +2472,13 @@
     const raw = String(o.actRaw || '').trim();
     if (raw) {
       const infm = raw.match(/^(\u221e|inf|Infinity)\s*([\s\S]*)$/i);
-      if (infm) { o.actInf = true; o.actN = Infinity; o.actCap = Infinity; o.act = nameList((infm[2] || '').trim()); }
+      if (infm) { o.actInf = true; o.actN = Infinity; o.actCap = Infinity; o.act = nameList((infm[2] || '').trim()).map(kblNorm); }
       else {
         const m = raw.match(/^\s*(\d+)\s*(?:\/\s*(\d+|\u221e)\s*)?([\s\S]*)$/);
         if (m) {
           o.actN = +m[1];
           if (m[2] === '\u221e') { o.actInf = true; o.actCap = Infinity; }
-          o.act = nameList((m[3] || '').trim());
+          o.act = nameList((m[3] || '').trim()).map(kblNorm);   /* v3.61.0 归一：英文名照认 */
         } else {
           o.errs.push('激 只认「激 N/M 名单」或「激 ∞」：' + raw);
         }
@@ -2528,6 +2539,8 @@
   const KBL_H_UP = kblBottomOf(KBL_ORDER, KBL_LAB_DY, false);
   const KBL_H_INV = kblBottomOf(KBL_ORDER, KBL_LAB_DY_INV, true);
 
+  /* v3.61.0 帅化：SVG defs id 逐卡唯一（同文档多张卡不串滤镜/渐变） */
+  let KB_SVG_N = 0;
   function kblSvg(k, grade) {
     const hasInv = k.inversed.length > 0;
     const sss = grade === 'SSS';
@@ -2541,17 +2554,46 @@
     const solved = new Set(k.solved), invd = new Set(k.inversed);
     const actSet = new Set(k.actInf ? [...solved, ...invd] : (k.actList || []));
     const out = [];
+    const uid = ++KB_SVG_N;
     out.push(`<svg class="kb-svg g-${grade}" viewBox="0 0 320 ${H}" xmlns="http://www.w3.org/2000/svg">`);
-    KBL_PATHS.forEach(([a, b]) => {
+    /* v3.61.0：辉光滤镜 + 双侧树底光环（正银白 / 逆绯红，吞得越多越亮，满侧叠一层浓的） */
+    out.push('<defs>' +
+      `<filter id="kbg${uid}" x="-70%" y="-70%" width="240%" height="240%">` +
+      '<feGaussianBlur stdDeviation="2.6" result="b"/>' +
+      '<feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>' +
+      `<radialGradient id="kba${uid}" cx="50%" cy="50%" r="50%">` +
+      '<stop offset="0%" stop-color="#e8f0ff" stop-opacity=".18"/><stop offset="100%" stop-color="#e8f0ff" stop-opacity="0"/></radialGradient>' +
+      `<radialGradient id="kbi${uid}" cx="50%" cy="50%" r="50%">` +
+      '<stop offset="0%" stop-color="#ff6a6a" stop-opacity=".16"/><stop offset="100%" stop-color="#ff6a6a" stop-opacity="0"/></radialGradient>' +
+      '</defs>');
+    const upN = solved.size, invOn = forceInv ? 0 : invd.size;
+    out.push(`<ellipse cx="160" cy="130" rx="150" ry="128" fill="url(#kba${uid})" style="opacity:${(0.35 + upN * 0.065).toFixed(2)}"/>`);
+    if (upN >= 10) out.push(`<ellipse cx="160" cy="130" rx="120" ry="104" fill="url(#kba${uid})" style="opacity:.5"/>`);
+    if (hasInv) {
+      out.push(`<ellipse cx="160" cy="${KBL_MIRROR - 130}" rx="150" ry="128" fill="url(#kbi${uid})" style="opacity:${(0.3 + invOn * 0.06).toFixed(2)}"/>`);
+      if (invOn >= 10) out.push(`<ellipse cx="160" cy="${KBL_MIRROR - 130}" rx="120" ry="104" fill="url(#kbi${uid})" style="opacity:.5"/>`);
+    }
+    /* v3.61.0 活线：两端皆亮的连线 = 流光（dash 滚动）；单端亮半亮；ghost 走旧暗线 */
+    const lineUp = (a, b, inv, ghost) => {
       const A = KBL_XY[KBL_ORDER[a]], B = KBL_XY[KBL_ORDER[b]];
-      out.push(`<line class="kp" x1="${A[0]}" y1="${A[1]}" x2="${B[0]}" y2="${B[1]}"/>`);
-    });
+      const y1 = inv ? KBL_MIRROR - A[1] : A[1], y2 = inv ? KBL_MIRROR - B[1] : B[1];
+      const onA = inv ? invd.has(KBL_ORDER[a]) : solved.has(KBL_ORDER[a]);
+      const onB = inv ? invd.has(KBL_ORDER[b]) : solved.has(KBL_ORDER[b]);
+      const lit = !ghost && onA && onB;
+      const half = !ghost && !lit && (onA || onB);
+      const cls = 'kp' + (inv ? ' inv' : '') + (ghost ? ' ghost' : '') + (lit ? ' lit' : '');
+      let st = '';
+      if (lit) st = 'stroke-opacity:.85;stroke-dasharray:5 7;stroke-width:1.6';
+      else if (half) st = 'stroke-opacity:.55';
+      else if (!ghost) st = 'stroke-opacity:.30';
+      out.push(`<line class="${cls}" x1="${A[0]}" y1="${y1}" x2="${B[0]}" y2="${y2}"${st ? ` style="${st}"` : ''}>` +
+        (lit ? '<animate attributeName="stroke-dashoffset" values="24;0" dur="2.4s" repeatCount="indefinite"/>' : '') +
+        '</line>');
+    };
+    KBL_PATHS.forEach(([a, b]) => lineUp(a, b, false, false));
     if (hasInv || forceInv) {
       out.push(`<line class="kb-mirror-line" x1="20" y1="250" x2="300" y2="250"/>`);
-      KBL_PATHS.forEach(([a, b]) => {
-        const A = KBL_XY[KBL_ORDER[a]], B = KBL_XY[KBL_ORDER[b]];
-        out.push(`<line class="kp inv${forceInv ? ' ghost' : ''}" x1="${A[0]}" y1="${KBL_MIRROR - A[1]}" x2="${B[0]}" y2="${KBL_MIRROR - B[1]}"/>`);
-      });
+      KBL_PATHS.forEach(([a, b]) => lineUp(a, b, true, forceInv));
       if (forceInv) out.push(`<line class="kb-pillar-ghost" x1="160" y1="14" x2="160" y2="486"/>`);
     }
     if (sss) {
@@ -2562,8 +2604,8 @@
       });
     }
     /* Da'at：空心菱形 + 虚线 + 极淡白，三态恒亮（它是「活节点的存在」，不是获得的东西） */
-    out.push(`<rect class="kn daat" data-kind="daat" x="${DAAT_XY[0] - 8}" y="${DAAT_XY[1] - 8}" width="16" height="16" transform="rotate(45 ${DAAT_XY[0]} ${DAAT_XY[1]})" style="fill:#F7F5FF;fill-opacity:.35;stroke:#F7F5FF;stroke-opacity:.75;stroke-dasharray:3 3;stroke-width:1.3"/>`);
-    out.push(`<rect x="${DAAT_XY[0] - 4}" y="${DAAT_XY[1] - 4}" width="8" height="8" transform="rotate(45 ${DAAT_XY[0]} ${DAAT_XY[1]})" style="fill:#FFFFFF;fill-opacity:.30;stroke:none"/>`);
+    out.push(`<rect class="kn daat" data-kind="daat" x="${DAAT_XY[0] - 8}" y="${DAAT_XY[1] - 8}" width="16" height="16" transform="rotate(45 ${DAAT_XY[0]} ${DAAT_XY[1]})" style="fill:#F7F5FF;fill-opacity:.35;stroke:#F7F5FF;stroke-opacity:.75;stroke-dasharray:3 3;stroke-width:1.3"><animateTransform attributeName="transform" type="rotate" from="45 ${DAAT_XY[0]} ${DAAT_XY[1]}" to="405 ${DAAT_XY[0]} ${DAAT_XY[1]}" dur="16s" repeatCount="indefinite"/></rect>`);
+    out.push(`<rect x="${DAAT_XY[0] - 4}" y="${DAAT_XY[1] - 4}" width="8" height="8" transform="rotate(45 ${DAAT_XY[0]} ${DAAT_XY[1]})" style="fill:#FFFFFF;fill-opacity:.30;stroke:none"><animate attributeName="fill-opacity" values=".30;.65;.30" dur="3.2s" repeatCount="indefinite"/></rect>`);
     out.push(`<text class="kb-lab" x="${DAAT_XY[0] + 14}" y="${DAAT_XY[1] + 3}">Da'at 活节点</text>`);
     KBL_ORDER.forEach((n, i) => {
       const P = KBL_XY[n], c = KBL_COLORS[n] || '#94a3b8';
@@ -2571,8 +2613,11 @@
       const act = on && actSet.has(n);
       /* 已解锁分两层：已激活 = 实心 + 外圈高亮实环 + 光晕；已解锁未激活 = 实心 + 虚线细环（暗，但看得出存在）。
          认 class 不认文字：`.act` = 激活，`.on` 且非 `.act`（即 `.idle`）= 解锁未激活。 */
-      out.push(`<circle class="kn${on ? ' on' : ''}${act ? ' act' : (on ? ' idle' : '')}" data-sef="${i}" data-kind="up" cx="${P[0]}" cy="${P[1]}" r="11" style="fill:${c};fill-opacity:${on ? '1' : '.16'};stroke:${c};stroke-opacity:${on ? '.95' : '.38'}"/>`);
-      if (act) out.push(`<circle class="kn-ring" cx="${P[0]}" cy="${P[1]}" r="17" style="fill:none;stroke:${c};stroke-opacity:.85;stroke-width:2.2"/>`);
+      out.push(`<circle class="kn${on ? ' on' : ''}${act ? ' act' : (on ? ' idle' : '')}" data-sef="${i}" data-kind="up" cx="${P[0]}" cy="${P[1]}" r="11" style="fill:${c};fill-opacity:${on ? '1' : '.16'};stroke:${c};stroke-opacity:${on ? '.95' : '.38'}${on ? `;filter:url(#kbg${uid})` : ''}"/>`);
+      if (act) {
+        out.push(`<circle cx="${P[0]}" cy="${P[1]}" r="3.2" fill="#fff" fill-opacity=".95" style="filter:url(#kbg${uid})"/>`);
+        out.push(`<circle class="kn-ring" cx="${P[0]}" cy="${P[1]}" r="17" style="fill:none;stroke:${c};stroke-opacity:.85;stroke-width:2.2"><animate attributeName="r" values="15;20;15" dur="1.8s" repeatCount="indefinite"/><animate attributeName="stroke-opacity" values=".85;.30;.85" dur="1.8s" repeatCount="indefinite"/></circle>`);
+      }
       else if (on) out.push(`<circle class="kn-ring idle" cx="${P[0]}" cy="${P[1]}" r="17" style="fill:none;stroke:${c};stroke-opacity:.28;stroke-width:1;stroke-dasharray:2 3"/>`);
       const L = enLabel(n, false);
       out.push(`<text class="kb-lab"${L.text !== L.full ? ` data-full="${esc(L.full)}"` : ''} x="${P[0]}" y="${P[1] + KBL_LAB_DY}" text-anchor="middle">${esc(L.text)}${L.text !== L.full ? `<title>${esc(L.full)}</title>` : ''}</text>`);
@@ -2583,7 +2628,11 @@
         const on = !forceInv && invd.has(n);
         const actInv = on && actSet.has(n);
         const y = KBL_MIRROR - P[1];
-        out.push(`<rect class="kn${on ? ' on' : ''}${actInv ? ' act' : (on ? ' idle' : '')}${forceInv ? ' ghost' : ''}" data-sef="${i}" data-kind="inv" x="${P[0] - 9}" y="${y - 9}" width="18" height="18" transform="rotate(45 ${P[0]} ${y})" style="fill:${c};fill-opacity:${on ? '1' : (forceInv ? '.05' : '.14')};stroke:${c};stroke-opacity:${on ? '.95' : (forceInv ? '.16' : '.34')}"/>`);
+        out.push(`<rect class="kn${on ? ' on' : ''}${actInv ? ' act' : (on ? ' idle' : '')}${forceInv ? ' ghost' : ''}" data-sef="${i}" data-kind="inv" x="${P[0] - 9}" y="${y - 9}" width="18" height="18" transform="rotate(45 ${P[0]} ${y})" style="fill:${c};fill-opacity:${on ? '1' : (forceInv ? '.05' : '.14')};stroke:${c};stroke-opacity:${on ? '.95' : (forceInv ? '.16' : '.34')}${on ? `;filter:url(#kbg${uid})` : ''}"/>`);
+        if (actInv) {
+          out.push(`<rect x="${P[0] - 13}" y="${y - 13}" width="26" height="26" transform="rotate(45 ${P[0]} ${y})" style="fill:none;stroke:${c};stroke-opacity:.85;stroke-width:2"><animate attributeName="stroke-opacity" values=".85;.30;.85" dur="1.8s" repeatCount="indefinite"/></rect>`);
+          out.push(`<circle cx="${P[0]}" cy="${y}" r="2.8" fill="#fff" fill-opacity=".9" style="filter:url(#kbg${uid})"/>`);
+        }
         const L2 = enLabel(n, true);
         out.push(`<text class="kb-lab inv-lab${forceInv ? ' ghost' : ''}"${L2.text !== L2.full ? ` data-full="${esc(L2.full)}"` : ''} x="${P[0]}" y="${y + KBL_LAB_DY_INV}" text-anchor="middle">${esc(L2.text)}${L2.text !== L2.full ? `<title>${esc(L2.full)}</title>` : ''}</text>`);
       });
