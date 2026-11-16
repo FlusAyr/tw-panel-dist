@@ -9,7 +9,7 @@
   if (window.__twCardLoaded) return;
   window.__twCardLoaded = true;
 
-  const VERSION = '3.63.0';
+  const VERSION = '3.66.0';
 
   /* 面板尺寸偏好：紧凑(tc-mini)/完整。localStorage 持久化，点击 .tc-size 全局切换 */
   const SIZE_KEY = 'tw-card:size';
@@ -84,7 +84,7 @@
      认它只为一件事：让这一行被正常解析、不进 orphans、也不让整块被
      「无已定义状态键」守卫跳过（被跳过 = 原始文本留在消息里 = 正好泄露给玩家）。
      st.bossSkills 目前没有任何渲染调用者，这是设计，不是漏写。 */
-  const KEYS = 'scene|team|quest|check|result|world|next|bond[0-9]*|foe[0-9]*|nb[0-9]*|nf[0-9]*|nh[0-9]*|nd[0-9]*|nl[0-9]*|npc[0-9]*|kbnpc[0-9]*|ntrnpc[0-9]*|kbm[0-9]*|kbf[0-9]*|dmg[0-9]*|sh[0-9]*|dz[0-9]*|wh[0-9]*|pl[0-9]*|lk[0-9]*|kbmsk[0-9]*|kbfsk[0-9]*|pts[0-9]+|lock[0-9]+|ti[0-9]+|cr[0-9]+|p[0-9]+|sk[0-9]+|eq[0-9]+|mob[0-9]*|bs[0-9]*|kbl[0-9]*|yz[0-9]*|bl[0-9]*|zw|ack|pace';
+  const KEYS = 'scene|team|quest|check|result|world|next|bond[0-9]*|foe[0-9]*|nb[0-9]*|nf[0-9]*|nh[0-9]*|nd[0-9]*|nl[0-9]*|npc[0-9]*|kbnpc[0-9]*|ntrnpc[0-9]*|kbm[0-9]*|kbf[0-9]*|dmg[0-9]*|sh[0-9]*|dz[0-9]*|wh[0-9]*|pl[0-9]*|lk[0-9]*|kbmsk[0-9]*|kbfsk[0-9]*|pts[0-9]+|lock[0-9]+|ti[0-9]+|cr[0-9]+|p[0-9]+|sk[0-9]+|eq[0-9]+|mob[0-9]*|bs[0-9]*|kbl[0-9]*|kbd[0-9]*|yz[0-9]*|yzd[0-9]*|bl[0-9]*|zw|ack|pace';
   const LINE_RE = new RegExp('^[ \\t]*(' + KEYS + ')[:：][ \\t]*(.*)$', 'i');
   /* 拓展键登记表（AGENTS.md §3.1 规则 7）四列：键前缀 | base 名 | 渲染器 | 主题 class
      （派生第五列 field = 状态对象存放字段）。编号一律按「键前缀长度」取，禁字面量偏移
@@ -1003,6 +1003,14 @@
     '加值': 'add', '加值构成': 'addParts', '合计': 'total',
     'DC': 'dc', '目标DC': 'dc', 'DC构成': 'dcParts',
     '基础档': 'dcBase', '阶级修正': 'dcClass',
+    /* v3.66.0 · 新 AD 体系与 DC 五段。
+       这十一段原先一个都不认，于是 `值 464/240`／`结论 攻方碾压` 全落进 o.fields 当装饰文字，
+       「模型编值」从来没被任何东西拦过 —— 面板根本没读那六个数。
+       进槽之后同一段就不会再出现在 fields 里，所以测试必须同时断言两件事。 */
+    '值': 'cvsRaw', '各掷': 'rollPair', '有效': 'effPair',
+    '差': 'gap', '结论': 'verdict', '伤害': 'dmgMul',
+    '检定': 'rollExpr', '现场档': 'dlLive', '规格档': 'dlSpec',
+    '阶级': 'dcClass', '极值范围': 'critfail',
   };
 
   /* ── check 卡算术对账 ──
@@ -1046,6 +1054,25 @@
           out.push('DC 与构成不符：写 ' + fmtN(dc) + '，' + fmtN(b) + '+' + fmtN(e) + '+' + fmtN(cl) + '=' + fmtN(b + e + cl));
       }
     }
+    /* ⑤ |AD|>100 ＝ 碾压，不许还在掷骰。AD 与结论原先只是口头约定：
+          写 +224 又写「均势」也没人管。这里把它变成机器判据。 */
+    if (ad != null && Math.abs(ad) > 100) {
+      if (c.verdict && !/碾压/.test(c.verdict))
+        out.push('AD ' + brN(ad) + ' 已过百，结论应是碾压，卡上写「' + c.verdict + '」');
+      if (c.rollPair && !/^\s*[—\-–]\s*\/\s*[—\-–]\s*$/.test(c.rollPair))
+        out.push('AD ' + brN(ad) + ' 已过百，不该再掷骰，各掷应是 —/—，卡上写「' + c.rollPair + '」');
+    }
+    /* ⑥ |AD|≤100 时 `差` 必须等于 |有效攻−有效守|（容差 0）。
+          `差` 是给人看的结论数，`有效` 是掷骰前的实际筹码 —— 两者对不上＝这张卡自相矛盾。 */
+    if (ad != null && Math.abs(ad) <= 100 && c.eff && c.gap) {
+      const g = numOf(c.gap);
+      if (g != null) {
+        const real = Math.abs(c.eff.atk - c.eff.def);
+        if (Math.abs(g - real) > 0.01)
+          out.push('差与有效不符：有效 ' + fmtN(c.eff.atk) + '/' + fmtN(c.eff.def)
+            + ' → 差 ' + fmtN(real) + '，卡上写 ' + fmtN(g));
+      }
+    }
     return out;
   }
 
@@ -1060,6 +1087,21 @@
       const m = x.match(/^([^\s:：]{1,12})[\s:：]+([\s\S]*)$/);
       if (m && CHECK_KEYS[m[1]]) { o[CHECK_KEYS[m[1]]] = m[2].trim(); continue; }
       o.fields.push(x);
+    }
+    /* `值`／`有效` 一律存成 {atk, def} 数对：对账要的是数，留字符串等于让人再解一次，
+       而「同一判定里的两个数各算一遍」正是 §7 #34 说的那种失效面。
+       取不到数（写成「碾压」「—/—」）就留 null —— 不猜。 */
+    const pairOf = (t) => {
+      const m = String(t).match(/^\s*(-?\d+)\s*\/\s*(-?\d+)\s*$/);
+      return m ? { atk: +m[1], def: +m[2] } : null;
+    };
+    if (o.cvsRaw != null) { o.cvsText = o.cvsRaw; o.cvs = pairOf(o.cvsRaw); delete o.cvsRaw; }
+    if (o.effPair != null) o.eff = pairOf(o.effPair);
+    /* `DC构成 现场档 DL3` 是一整段：现场档不是独立段，它被 DC构成 吃掉了。
+       所以从 dcParts 里把它拆出来 —— 否则「现场档」永远只有半个槽（dcParts 是给综合构成用的）。 */
+    if (o.dcParts) {
+      const mm = String(o.dcParts).match(/^\s*(现场档|规格档)\s*[:：]?\s*(.+?)\s*$/);
+      if (mm) { if (mm[1] === '现场档') o.dlLive = mm[2]; else o.dlSpec = mm[2]; }
     }
     return o;
   }
@@ -1401,6 +1443,13 @@
     return { lines: out, mobs };
   }
 
+  /* 最近一次 parseState 产出的「无宿主负向状态」，只给 diag() 读。
+     diag() 是环境诊断、拿不到 st，所以这里留一份引用；不参与渲染决策。 */
+  let lastDbfOrphans = [];
+  /* 同上：DC构成 多段的软提示、值对账结果，只给 diag() 读，不进卡面 */
+  let lastCheckHints = [];
+  let lastAdAudit = [];
+
   /* ── dmg<N>：伤害事件行 ──
      契约示例：dmg1: 甲→乙 | 因 链锯剑·横扫 | 算 1D8+2 +4 +20% −3 | 伤 撕裂·左臂 ·12 | 血 84→72 | 判 命中
      设计要点：
@@ -1547,7 +1596,7 @@
   function parseState(text) {
     const st = {
       scene: '', team: '', quest: null, checks: [],
-      players: [], npcs: [], kbnpcs: [], ntrnpcs: [], bonds: [], foes: [], mobs: [], ntrBonds: [], ntrFoes: [], ntrHearts: [], ntrFalls: [], ntrLogs: [], mechas: [], familiars: [], dmgs: [], shelters: [], disasters: [], warehouses: [], places: [], geneLocks: [], crOrphans: [], orphans: [], ack: null, pace: null, zw: null, kbls: [], yzs: [], bls: [],
+      players: [], npcs: [], kbnpcs: [], ntrnpcs: [], bonds: [], foes: [], mobs: [], ntrBonds: [], ntrFoes: [], ntrHearts: [], ntrFalls: [], ntrLogs: [], mechas: [], familiars: [], dmgs: [], shelters: [], disasters: [], warehouses: [], places: [], geneLocks: [], crOrphans: [], orphans: [], ack: null, pace: null, zw: null, kbls: [], yzs: [], bls: [], kbds: [], yzds: [],
       result: '', world: '', next: '', bossSkills: [],
     };
     const pmap = new Map(), smap = new Map(), emap = new Map();
@@ -1573,6 +1622,7 @@
     const whmap = new Map(), plmap = new Map();
     const lkmap = new Map();
     const blmap = new Map();
+    const kbdmap = new Map(), yzdmap = new Map();
     const xmap = {}; EXT_KEYS.forEach(e => { xmap[e.field] = new Map(); });
     const checks = [];
     const split = splitInlineKeys(text);
@@ -1591,6 +1641,8 @@
       else if (k === 'pace') st.pace = parsePace(v);
       else if (k === 'zw') st.zw = parseZw(v);
       else if (/^bl\d*$/.test(k)) blmap.set(k === 'bl' ? 1 : +k.slice(2), parseBl(v));
+      else if (/^kbd\d*$/.test(k)) kbdmap.set(k === 'kbd' ? 1 : +k.slice(3), parseDbuff(v));
+      else if (/^yzd\d*$/.test(k)) yzdmap.set(k === 'yzd' ? 1 : +k.slice(3), parseDbuff(v));
       else if (k === 'quest') st.quest = parseQuest(v);
       else if (k === 'check') checks.push(parseCheck(v));
       else if (k === 'result') st.result = v;
@@ -1671,6 +1723,34 @@
     });
     BLOOD_KEYS.forEach(function (e) { st[e.field] = hook(bmaps[e.key]); });
     st.bls = hook(blmap);
+    /* 负向状态挂载：kbd<N> 挂到同号 kbl<N>、yzd<N> 挂到同号 yz<N>。
+       同号没有宿主就不挂 —— 数据留在 st.kbds / st.yzds 里，
+       不丢、也不猜它属于谁（按编号配对是既有语义）。 */
+    st.kbds = hook(kbdmap);
+    st.yzds = hook(yzdmap);
+    /* v3.65.0 · 无宿主的负向状态必须**看得见**。
+       按编号配对是既有语义（kbd1→kbl1、yzd1→yz1），但「配对失败」原先完全静默：
+       写 `kbd2` 而场上只有 `kbl1` 时，这条负向状态凭空消失，而 kbds 计数、orphans、
+       卡面全都正常 —— 与 v3.55.0 那五条出口同一个病（条款存在、渲染无权），
+       所以用同一套处置：记下名字，在卡面出 ⚠；报元素不报数量（§7 #22）。 */
+    st.dbfOrphans = [];
+    st.kbds.forEach(function (d) {
+      const host = (st.kbls || []).filter(function (r) { return (r.n || 1) === (d.n || 1); })[0];
+      if (host) (host.debuffs = host.debuffs || []).push(d);
+      else st.dbfOrphans.push({ kind: 'kb', n: (d.n || 1), name: d.name });
+    });
+    st.yzds.forEach(function (d) {
+      const host = (st.yzs || []).filter(function (r) { return (r.n || 1) === (d.n || 1); })[0];
+      if (host) (host.debuffs = host.debuffs || []).push(d);
+      else st.dbfOrphans.push({ kind: 'yz', n: (d.n || 1), name: d.name });
+    });
+    lastDbfOrphans = st.dbfOrphans;
+    lastAdAudit = st.adAudit;
+    /* `DC构成` 被 `｜` 切开时只会有第一段进 dcParts，其余落成独立段（现场档／规格档／阶级）。
+       这不是错，是格式使然；但「玩家看到的 DC构成 比卡上短」这件事不该静默，
+       所以记一条软提示进 diag()，**不**进卡面 ⚠ —— 新卡全都长这样，进卡面＝把 ⚠ 变常态。 */
+    lastCheckHints = (st.checks || []).filter(function (c) { return c && c.dcParts && (c.dlLive || c.dlSpec || c.dcClass); })
+      .map(function (c) { return 'DC构成 只识别到第一段（' + c.dcParts + '），其余段各自成槽'; });
     /* bl 行按同号挂到玩家身上，供「档案」里那两行用；没有就是 null */
     /* bl 行按同号挂到玩家身上，供「档案」里那两行用。
        派生规则（只影响显示，不改解析）：某侧 bl 没写 → 用同号 kbl/yz 各自的 阶 顶上。
@@ -1771,6 +1851,69 @@
          B2 有判定无结果：有数字，但数字不在伤害位置、段里也没有反抗词（典型 `未中` 结尾）
          B3 无判定无结果：只有动作（`举起斧头` 这种）
        **只报不改**：绝不自动补 `敌：`，绝不改回合数。 */
+    /* ⚠ v3.66.0 · `值` 与卡上筹码对账。
+       这是唯一能当场抓住「模型编值」的地方：上一轮用户贴的 `值 370/212`／`值 327/365`
+       四个数一个都推不出来，而当时面板根本没读它们，只能靠外部脚本复算。
+       判据只认复合值（七维齐全才有 cv），名字对不上就不判、不猜、不造告警：
+       宁可漏一次，也不能让 ⚠ 出现在正常卡上（§7 #27）。 */
+    st.adAudit = (function () {
+      const out = [];
+      const ents = [].concat(st.players || [], st.mobs || []);
+      (st.checks || []).forEach(function (c) {
+        if (!c || !c.cvs) return;
+        const t = String(c.title || '');
+        /* 标题里本来就有方向：`[敌1] 对抗·DEX (极寒冰甲巨兽·甲→叶临)`。
+           有箭头就按箭头认攻守 —— 原先按「名字在标题里出现的位置」排序，
+           一旦有一侧在状态块里根本不存在（只有 check 卡、没有 mob 行），
+           另一侧就会被顶上去当攻方，把攻方的数挂到守方名下。
+           **归因错了的警告比没有警告更贵**：它污染的是这一整类信号的可信度。 */
+        const arrow = t.match(/\(([^()]+?)→([^()]+?)\)/);
+        const byName = function (nm) {
+          if (!nm) return null;
+          const want = nm.trim();
+          let hit = ents.filter(function (e) { return e && e.name === want; })[0];
+          if (!hit) {   /* 容错：标题常省掉状态块里的括注（`黑瞳` vs `黑瞳(Kurome)`），
+                           也常带「·乙」这类后缀限定 —— 两边各试一次，只有唯一命中才认，
+                           命中多个一律不认（认错人比不报更糟） */
+            const loose = ents.filter(function (e) {
+              if (!e || !e.name) return false;
+              return want.indexOf(e.name) >= 0 || e.name.indexOf(want) >= 0;
+            });
+            if (loose.length === 1) hit = loose[0];
+          }
+          return hit || null;
+        };
+        let A = null, B = null;
+        if (arrow) {
+          A = byName(arrow[1]);
+          B = byName(arrow[2]);
+        } else {
+          /* 没有箭头才退回位置排序；此时只有一个名字就当「同一实体 攻/守」比 */
+          const cand = ents.filter(function (e) { return e && e.name && t.indexOf(e.name) >= 0; })
+            .map(function (e) { return { e: e, at: t.indexOf(e.name) }; })
+            .sort(function (x, y) { return x.at - y.at; })
+            .map(function (x) { return x.e; });
+          A = cand[0] || null;
+          /* 单人卡（如「对抗 STR (甲)」自己比上限）没有第二个名字：此时 A 就是这张卡的主体，
+             守方回落到 A 本人 —— 这和「拿别人顶上」是两件事，前者是同一实体自比。 */
+          B = cand[1] || cand[0] || null;
+        }
+        /* 某一侧在 players+mobs 里找不到 → 那一侧不判，绝不转让给另一侧。
+           「找不到就是找不到」，拿人家顶上等于制造一条错怪人的 ⚠。 */
+        if (A && A.cv && c.cvs.atk !== A.cv.atk)
+          out.push('⚠ ' + A.name + ' 的值写 ' + c.cvs.atk + '，卡上筹码 ' + A.cv.atk + '（攻）');
+        if (B && B.cv && c.cvs.def !== B.cv.def)
+          out.push('⚠ ' + B.name + ' 的值写 ' + c.cvs.def + '，卡上筹码 ' + B.cv.def + '（守）');
+      });
+      /* 同名 + 同数值 + 同一侧，只报一次：246 被挂两遍只会让人以为有两处错 */
+      const seen = {};
+      return out.filter(function (t) {
+        if (seen[t]) return false;
+        seen[t] = 1;
+        return true;
+      });
+    })();
+
     st.enemyAudit = (function () {
       /* 为什么不做「名字出现在 team 段里就跳过」的排除：mob 在渲染结构上被钉死在右翼
          「敌方威胁」列（panel.js 里 team → 左翼我方小队、mob → 右翼），友方没有 CPU 通道会走 mob。
@@ -1816,6 +1959,70 @@
       });
       if (!unsettled.length && !symbolic.length) return null;
       return { noSeg: false, unsettled: unsettled, symbolic: symbolic };
+    })();
+
+    /* ══ v3.65.0 · 单场限伤对账：BOSS／超规格 的 dmg 行 ══
+       规则出处（世界书）：跑团用 uid=9【单次上限按阶级】＋无限恐怖 uid=1【战斗基线】——
+       玩家对 BOSS／超规格，单条 dmg ≤ 目标最大 HP 的 15%，该回合（轮＝一楼）全部
+       dmg 合计 ≤ 30%；杂兵／精英无上限；超出部分记「溢 N」只作描述、不入账。
+       面板这一侧只对账，不改数：dmg 行不改、mob HP 不改、不自动截断 ——
+       这是「审计接口，不是执行引擎」。
+
+       三个取值决定，都写在代码里而不是报告里：
+       ① 点数取 `伤` 段末尾那个数（parseDmg 的 o.amount），**不从 `算` 段取**：
+          `算` 按设计只保留原文、绝不求值（见 parseDmg 顶部那条注释 ——
+          「数值由模型算，渲染器算一遍就是第二个事实来源，两边不一致时没人知道该信谁」）。
+          在 `算` 上再求一次值，等于亲手造出第二个事实来源。
+       ② **只判 BOSS／超规格**。杂兵与精英本来就没有上限，对它们报「超限」是误报；
+          误报一次玩家就学会无视黄字，比不报更坏（§7 #27）。
+       ③ 匹配不到 mob、或 mob 没写 `hp/max` 的，一律不判 —— 不猜目标是谁、不拿别的数顶替。 */
+    st.capAudit = (function () {
+      const mobs = st.mobs || [], dmgs = st.dmgs || [];
+      if (!mobs.length || !dmgs.length) return null;
+      const CAP_ONE = 0.15, CAP_TURN = 0.30;
+      /* 阶级归一：grade 可能写作 `BOSS` / `BOSS·恶魔队` / `Boss` / `超规格` / `超规格 BOSS`。
+         判据是「归一名里含 BOSS 或 超规格」，不是等于某个字面量。 */
+      const capped = (g) => /超规格/.test(String(g || '')) || /\bboss\b/i.test(String(g || ''));
+      /* 名字匹配：mob 名常带括注（`黑瞳(Kurome)`），而 dmg 的 `→` 后面多半只写 `黑瞳`。
+         策略两步，顺序不能反：
+         （a）去括注后**等值**——先试它，因为它不会把 `黑瞳` 配到 `黑瞳·分身` 头上；
+         （b）等值落空时退到**包含**（双向），兜住 `艾斯德斯(BOSS形态)` 这类只差后缀的写法。
+         两步都不中就不判：宁可少一条黄字，不可把伤害记到别人头上。 */
+      const bare = (x) => String(x || '').replace(/[（(][^）)]*[）)]/g, '').trim();
+      const findMob = function (name) {
+        const n = bare(name);
+        if (!n) return null;
+        const eq = mobs.filter(function (m) { return bare(m.name) === n; })[0];
+        if (eq) return eq;
+        return mobs.filter(function (m) {
+          const mn = bare(m.name);
+          return !!mn && (mn.indexOf(n) >= 0 || n.indexOf(mn) >= 0);
+        })[0] || null;
+      };
+      const groups = [];
+      dmgs.forEach(function (d) {
+        const amt = (typeof d.amount === 'number') ? d.amount : null;
+        if (amt == null || amt <= 0) return;        /* 没写 `伤 …N` / 写 0 或负数：没有可对账的量 */
+        const mob = findMob(d.to);
+        if (!mob) return;                            /* 目标匹配不到：不猜 */
+        if (!capped(mob.grade)) return;              /* 杂兵／精英无上限 */
+        const max = mob.hpMax;
+        if (typeof max !== 'number' || !(max > 0)) return;   /* 目标没写 HP 上限：比例无从算 */
+        let g = groups.filter(function (x) { return x.name === mob.name && x.max === max; })[0];
+        if (!g) { g = { name: mob.name, max: max, sum: 0, one: 0 }; groups.push(g); }
+        g.sum += amt;
+        if (amt > g.one) g.one = amt;
+      });
+      const out = [];
+      groups.forEach(function (g) {
+        const capOne = Math.floor(g.max * CAP_ONE);
+        const capTurn = Math.floor(g.max * CAP_TURN);
+        /* 单条与合计分开报：它们是两件事，合成一条时「是哪一刀越了线」会被抹掉。
+           但同一目标两条都越线时只出两条，不再按行展开 —— 一屏同质黄字会被整体屏蔽。 */
+        if (g.one > capOne) out.push({ name: g.name, max: g.max, kind: 'one', one: g.one, sum: g.sum, capOne: capOne, capTurn: capTurn });
+        if (g.sum > capTurn) out.push({ name: g.name, max: g.max, kind: 'turn', one: g.one, sum: g.sum, capOne: capOne, capTurn: capTurn });
+      });
+      return out.length ? out : null;
     })();
     return st;
   }
@@ -2491,6 +2698,41 @@
     return out;
   }
 
+  /* ── 负向状态（DEBUFF）：壳被动代价 / 质点代价 / 偏斜 / 天平 / 扭曲 / 咒波 ──
+     单独键行记账（kbd<N> → 卡巴拉、yzd<N> → 源质），渲染进对应血统卡体内部，不另开卡。
+     为什么必须单独键：这些代价原先散在卡面之外的段落里，玩家几乎看不见 ——
+     看不见的代价等于不存在的代价，所以「写了却没生效」这本账要从根上换位置。
+
+     段式与 kbl/yz 一致（全角 ｜ 分隔），字段前缀闭集 类/效/触/剩/态；
+     不是字段前缀的段落按顺序进 effs，第一段没前缀的当名字。
+     态 只认 生效/待触发/已解 —— 别的写法不静默吞掉，进 warns 并回落 生效。 */
+  function parseDbuff(v) {
+    const o = { name: '', kind: '', effs: [], trig: '', left: null, leftInf: false, state: '生效', warns: [], raw: String(v || '') };
+    String(v || '').split(/[｜|]/).map(x => x.trim()).filter(Boolean).forEach(function (seg, i) {
+      const m = seg.match(/^(类|效|触|剩|态)\s*[:：]?\s*([\s\S]*)$/);
+      if (m) {
+        const key = m[1], val = (m[2] || '').trim();
+        if (key === '类') { o.kind = val; return; }
+        if (key === '效') { if (val) o.effs.push(val); return; }
+        if (key === '触') { o.trig = val; return; }
+        if (key === '剩') {
+          if (/^(∞|无限|永久|-1)$/.test(val)) { o.leftInf = true; o.left = null; }
+          else { const n = val.match(/-?\d+/); o.left = n ? +n[0] : null; }
+          return;
+        }
+        if (key === '态') {
+          if (/^(生效|待触发|已解)$/.test(val)) o.state = val;
+          else { o.warns.push('态 只认 生效/待触发/已解：' + val); o.state = '生效'; }
+          return;
+        }
+      }
+      if (i === 0 && !o.name) { o.name = seg; return; }
+      o.effs.push(seg);
+    });
+    if (!o.name) o.name = '（未命名）';
+    return o;
+  }
+
   function parseKbl(v) {
     const o = { tree: '', stage: '', solved: [], inversed: [], usedRaw: '', bad: [], unknown: [], errs: [], warns: [], actRaw: '', hasScale: false, scale: null, hasParse: false, parsed: null, parsedWroteCap: null, raw: String(v || '') };
     String(v || '').split(/[｜|]/).map(x => x.trim()).filter(Boolean).forEach(seg => {
@@ -2823,6 +3065,37 @@
       '<div class="kb-srow kb-skewrow">' + skew + '</div>' + rest + '</div>';
   }
 
+  /* 负向状态块：渲染进宿主血统卡体（kbl / yz），不另开卡。
+     一条 = 名字 + 分类药丸 + 若干效果 + 触发 + 剩余；已解 → off（灰 + 删除线）。
+     不用动画：面板每楼重渲染，动画会抖 —— 抖的东西读起来像坏了。 */
+  function dbuffHtml(list, tag) {
+    const arr = (list || []).filter(Boolean);
+    if (!arr.length) return '';
+    const perm = arr.filter(function (d) { return d.leftInf; }).length;
+    /* 数字（含负号）吃红加粗：代价的分量在数字上，不在形容词上 */
+    const effEm = function (s2) {
+      return esc(s2).replace(/(-?\d+(?:\.\d+)?)/g, '<em>$1</em>');
+    };
+    const rows = arr.map(function (d) {
+      const off = d.state === '已解';
+      const soon = !d.leftInf && d.left != null && d.left <= 1;
+      const lf = d.leftInf ? '<span class="dbf-lf perm">永久</span>'
+        : (d.left != null ? '<span class="dbf-lf' + (soon ? ' soon' : '') + '">' + d.left + ' 轮</span>' : '');
+      return '<div class="dbf' + (off ? ' off' : '') + '" data-state="' + esc(d.state) + '">'
+        + '<span class="dbf-nm">' + esc(d.name) + '</span>'
+        + (d.kind ? '<span class="dbf-kd">' + esc(d.kind) + '</span>' : '')
+        + (d.effs || []).map(function (e) { return '<span class="dbf-ef">' + effEm(e) + '</span>'; }).join('')
+        + (d.trig ? '<span class="dbf-tg">' + esc(d.trig) + '</span>' : '')
+        + lf
+        + '</div>';
+    }).join('');
+    const wn = arr.reduce(function (a, d) { return a.concat(d.warns || []); }, [])
+      .map(function (w) { return '<div class="kb-warn">⚠ ' + esc(w) + '</div>'; }).join('');
+    return '<div class="dbf-wrap" data-dbf="' + esc(tag) + '">'
+      + '<div class="dbf-hd"><b>DEBUFF</b><i>负向 ' + arr.length + (perm ? ' · 永久 ' + perm : '') + '</i></div>'
+      + '<div class="dbf-list">' + rows + '</div>' + wn + '</div>';
+  }
+
   function renderKbl(k, owner, sc, entry) {
     const grade = gradeOf(k.stage);
     /* 完整侧：两枚徽章最多并存，各自独立；双树满 20 不新增徽章 —— 那是 SSS 本源的印章，
@@ -2851,7 +3124,7 @@
         (ss ? `<span class="kf-seal">${grade}</span>` : '') +
         `<span class="kf-ar" aria-hidden="true"></span>` +
       `</div>` +
-      `<div class="kf-body"><div class="kb-cap">${esc(bloodCapLine(entry))}</div>${scaleHtml(k, sc)}<div class="kb-tree-wrap">${kblSvg(k, grade)}</div>${warn}</div>` +
+      `<div class="kf-body"><div class="kb-cap">${esc(bloodCapLine(entry))}</div>${scaleHtml(k, sc)}${dbuffHtml(k.debuffs, 'kb')}<div class="kb-tree-wrap">${kblSvg(k, grade)}</div>${warn}</div>` +
       `</div>`;
   }
 
@@ -3003,7 +3276,7 @@
         (ss ? `<span class="kf-seal">${grade}</span>` : '') +
         `<span class="kf-ar" aria-hidden="true"></span>` +
       `</div>` +
-      `<div class="kf-body"><div class="kb-cap">${esc(bloodCapLine(entry))}</div><div class="yz-ring">` +
+      `<div class="kf-body"><div class="kb-cap">${esc(bloodCapLine(entry))}</div>${dbuffHtml(y.debuffs, 'yz')}<div class="yz-ring">` +
         (ss ? `<i class="yz-inner"></i>` : '') +
         YZ_ORDER.map(dot).join('') +
         `<div class="yz-hub">${TW_NAMES.map((n, i) => `<em style="color:${TW_COLORS[i]}">${n} ${tv([t.yong, t.zhan, t.lin][i])}</em>`).join('')}</div>` +
@@ -3174,6 +3447,11 @@
       /* v3.35 对账字段也照原样显示（解析了不显示，对账就成了自言自语） */
       ['➕ 加值', c.add], ['🧮 加值构成', c.addParts], ['🧾 合计', c.total],
       ['🎚 DC', c.dc], ['📐 DC构成', c.dcParts], ['🏛 基础档', c.dcBase], ['⚖ 阶级修正', c.dcClass],
+      /* v3.66.0 · 新 AD 体系与 DC 五段：有槽位才显示，旧卡没有这些段 → 一行都不多 */
+      ['🧪 检定', c.rollExpr], ['🧮 值', c.cvsText],
+      ['🎲 各掷', c.rollPair], ['✅ 有效', c.effPair], ['📏 差', c.gap],
+      ['⚖ 结论', c.verdict], ['💥 伤害', c.dmgMul],
+      ['🏷 现场档', c.dlLive], ['🏷 规格档', c.dlSpec],
     ].filter(r => r[1]);
 
     /* AI 写歪/多写的字段不再静默丢弃，全部兜底显示 */
@@ -3196,7 +3474,7 @@
       </div>
       ${aud.length ? `<div class="tc-ckaudit">${aud.map(t => `<div class="tc-ckline">⚠ ${esc(t)}</div>`).join('')}</div>` : ''}
       ${c.note ? `<div class="tc-cnote">📝 ${esc(c.note)}</div>` : ''}
-      ${(c.cost || c.critfail) ? `<div class="tc-cfoot">${c.cost ? `⚡ 超限消耗：${esc(c.cost)}` : ''}${c.cost && c.critfail ? ' ｜ ' : ''}${c.critfail ? `大失败范围：${esc(c.critfail)}` : ''}</div>` : ''}
+      ${(c.cost || c.critfail) ? `<div class="tc-cfoot">${c.cost ? `⚡ 超限消耗：${esc(c.cost)}` : ''}${c.cost && c.critfail ? ' ｜ ' : ''}${c.critfail ? `极值范围：${esc(c.critfail)}` : ''}</div>` : ''}
     </details>`;
   }
 
@@ -3871,6 +4149,33 @@
       });
     }
 
+    /* ⑨ v3.66.0 · `值` 对账：卡上的值必须等于卡上筹码。
+       只给绝对点数，不出现百分比 —— 模型和玩家都不做乘除。 */
+    (st.adAudit || []).forEach(function (t) {
+      log.push('<div class="tc-dmg-warn tc-adwarn">' + esc(t) + '</div>');
+    });
+
+    /* ⑧ v3.65.0 · 负向状态没有宿主：`kbd<N>` 找不到同号 `kbl<N>`（或 `yzd`/`yz`）。
+       一条负向状态凭空消失、计数却全对，是这类缺陷里最难自己发现的一种 ——
+       玩家只会觉得「这代价好像没生效」，说不出是哪一条。 */
+    (st.dbfOrphans || []).forEach(function (o) {
+      const host = (o.kind === 'kb' ? 'kbl' : 'yz') + o.n;
+      log.push('<div class="tc-dmg-warn tc-dbforphan">⚠ 负向状态「' + esc(o.name) + '」找不到宿主 '
+        + esc(host) + '（未渲染）——同号配对是既有语义，补一条 ' + esc(host) + ' 才会出现在卡面上</div>');
+    });
+
+    /* ⑦ v3.65.0 · 单场限伤：BOSS／超规格 的 dmg 行越线。
+       只报不改（dmg 行、mob HP、合计都不动）；文案只给**绝对点数**，不出现百分比 ——
+       百分比是面板自己的换算，把换算摆到台面上，玩家会开始跟算式吵架而不是跟模型对账。 */
+    (st.capAudit || []).forEach(function (c) {
+      const nm = '<b>' + esc(c.name) + '</b>';
+      log.push(c.kind === 'one'
+        ? '<div class="tc-dmg-warn tc-capwarn">⚠ ' + nm + ' 单条 ' + c.one + '/' + c.capOne
+          + ' —— 单条上限按目标最大 HP 算，超出部分只作描述、不入账（本回合 ' + c.sum + '/' + c.capTurn + '）</div>'
+        : '<div class="tc-dmg-warn tc-capwarn">⚠ ' + nm + ' 本回合 ' + c.sum + '/' + c.capTurn
+          + '（单条上限 ' + c.capOne + '）—— 超出部分只作描述、不入账</div>');
+    });
+
     (st.stateWarns || []).forEach(function (w) {
       const hpTxt = (w.max == null ? String(w.hp) : w.hp + '/' + w.max);
       const txt = w.why === 'near-high'
@@ -4163,7 +4468,9 @@
             st.checks.length || st.quest || st.next || st.result || st.world || st.team ||
             /* bossSkills 必须计入：它不渲染，但若整块只剩它就被判「无键」 -> break
                -> 原始文本留在消息里 -> 玩家正好看见技能暗牌。这一条是防泄露的。 */
-            (st.bossSkills && st.bossSkills.length);
+            (st.bossSkills && st.bossSkills.length) ||
+            /* 负向状态同理：整块只剩 kbd/yzd 时也不能判「无键」，否则原文留屏 */
+            (st.kbds && st.kbds.length) || (st.yzds && st.yzds.length);
           if (!meaningful) break;
 
           const holder = DOC.createElement('div');
@@ -4573,6 +4880,13 @@
   .tc-pace-bar i{width:4px;height:7px;border-radius:1px;background:rgba(148,163,184,.25)}
   .tc-pace-bar i.on{background:var(--pc)}
   .tc-pacewarn{display:flex;flex-direction:column;gap:2px}
+  /* 单场限伤：与 pac 黄字同族但单独一类（不复用 .kb-warn，那是 kbl/yz 的主题内元素） */
+  .tc-capwarn{font-variant-numeric:tabular-nums}
+  .tc-capwarn b{color:#fda4af;font-weight:700}
+  /* 无宿主的负向状态：紫罗兰，与限伤的玫红、敌情结算的琥珀分开认 */
+  .tc-dbforphan{color:#c4b5fd}
+  /* 值对账：青色，与限伤玫红、孤儿紫罗兰分开认 */
+  .tc-adwarn{color:#67e8f9}
   .tc-crwarn{font-size:9.5px;line-height:1.6;color:#fcd34d;background:rgba(251,191,36,.08);
     border-left:2px solid #fbbf24;border-radius:0 3px 3px 0;padding:3px 8px;margin:3px 0}
 .tc-fold{border-top:1px dashed var(--bd);padding-top:5px;margin-top:1px}
@@ -5280,6 +5594,29 @@ details[open]>.tc-skfl-ar::after{content:'▴'}
 
   .kb-kind { font-style: normal; font-size: 8.5px; letter-spacing: .04em; color: #c4b5fd; border: 1px solid rgba(167, 139, 250, .45); border-radius: 3px; padding: 0 3px; margin-left: 3px }
   .kb-cap { font-size: 9px; line-height: 1.5; color: #94a3b8; margin: 3px 0 2px; letter-spacing: .02em }
+  /* ── 负向状态（kbd/yzd）：玫红族，与本卡深色底同调；静，不动画 ── */
+  .dbf-wrap { margin: 6px 0 8px; padding: 6px 8px 7px; border: 1px solid rgba(244, 63, 94, .30); border-radius: 6px;
+    background: linear-gradient(180deg, rgba(244, 63, 94, .09), rgba(244, 63, 94, .02)) }
+  .dbf-hd { display: flex; align-items: baseline; gap: 6px; margin: 0 0 5px }
+  .dbf-hd b { font-size: 9px; letter-spacing: .14em; color: #fda4af; font-weight: 700 }
+  .dbf-hd i { font-style: normal; font-size: 8.5px; color: #fb7185; opacity: .78; letter-spacing: .02em }
+  .dbf-list { display: flex; flex-direction: column; gap: 4px }
+  .dbf { position: relative; display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 7px;
+    padding-left: 7px; font-size: 11px; line-height: 1.45; color: #e2e8f0 }
+  .dbf::before { content: ''; position: absolute; left: 0; top: 2px; bottom: 2px; width: 2px; border-radius: 1px;
+    background: #f43f5e }
+  .dbf.off { opacity: .45 }
+  .dbf.off::before { background: #64748b }
+  .dbf.off .dbf-nm { text-decoration: line-through }
+  .dbf-nm { color: #fecdd3; font-weight: 700 }
+  .dbf-kd { font-size: 8.5px; border-radius: 3px; padding: 0 4px; color: #fda4af;
+    background: rgba(244, 63, 94, .16); border: 1px solid rgba(244, 63, 94, .34) }
+  .dbf-ef { color: #e2e8f0 }
+  .dbf-ef em { font-style: normal; color: #fb7185; font-weight: 700; font-variant-numeric: tabular-nums }
+  .dbf-tg { color: #94a3b8; font-size: 10px }
+  .dbf-lf { margin-left: auto; font-size: 10px; color: #cbd5e1; font-variant-numeric: tabular-nums }
+  .dbf-lf.soon { color: #fbbf24 }
+  .dbf-lf.perm { color: #a78bfa }
   .kb-act { border: 1px solid rgba(129,140,248,.5); color: #a5b4fc; background: rgba(129,140,248,.14); }
 .kb-act.over { border-color: rgba(252,211,77,.55); color: #fcd34d; background: rgba(252,211,77,.14); }
 .kn.act { filter: drop-shadow(0 0 4px currentColor); }
@@ -5720,6 +6057,9 @@ details[open]>.tc-skfl-ar::after{content:'▴'}
       innerWidth: window.innerWidth,
       ua: (navigator && navigator.userAgent) || '',
       lastErr: lastErr,
+      dbfOrphans: lastDbfOrphans,
+      checkHints: lastCheckHints,
+      adAudit: lastAdAudit,
     };
   }
 
