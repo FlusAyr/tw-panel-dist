@@ -9,7 +9,7 @@
   if (window.__twCardLoaded) return;
   window.__twCardLoaded = true;
 
-  const VERSION = '3.61.0';
+  const VERSION = '3.61.1';
 
   /* 面板尺寸偏好：紧凑(tc-mini)/完整。localStorage 持久化，点击 .tc-size 全局切换 */
   const SIZE_KEY = 'tw-card:size';
@@ -2323,7 +2323,10 @@
     const pos = (typeof scale === 'number' && scale > 0) ? scale : 0;   /* 负侧不加 */
     const tilt = pos >= 9 ? 3 : (pos >= 6 ? 2 : (pos >= 3 ? 1 : 0));
     const und = (solved || []).indexOf('理解') >= 0 ? 2 : 0;
-    return base + tilt + und;
+    /* v3.61.1 补世界书【完整·正树】②机械（uid30）：解 满10 时「解析次数上限 ×2」——
+       激活槽 +1 早已实现（actCapOf），×2 这条漏了；倍率乘在总上限上（含天平/理解加成）。 */
+    const cap = base + tilt + und;
+    return kblSideFull(solved) ? cap * 2 : cap;
   }
 
   /* ── 血统 / 内功：自带结构化状态一律自建键行，不进 cr ──
