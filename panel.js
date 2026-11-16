@@ -9,7 +9,7 @@
   if (window.__twCardLoaded) return;
   window.__twCardLoaded = true;
 
-  const VERSION = '3.61.1';
+  const VERSION = '3.62.0';
 
   /* 面板尺寸偏好：紧凑(tc-mini)/完整。localStorage 持久化，点击 .tc-size 全局切换 */
   const SIZE_KEY = 'tw-card:size';
@@ -309,6 +309,31 @@
       pa.push(k + ' ' + a); pd.push(k + ' ' + d);
     }
     return { atk: atk, def: def, main: main, tipA: '攻＝' + pa.join('＋'), tipD: '守＝' + pd.join('＋') };
+  }
+
+  /* 战斗数值条（v3.62.0）：攻/守/甲/减伤/护盾/增伤 各占一枚专属筹码——
+     与 MOV/DB 分开独占一条横带，标签小字在上、数值大字在下，颜色按「攻金/守青/甲钢/减伤灰蓝/盾蓝/增伤橘」。
+     数值只放 total（三段的明细进 tooltip），筹码本身不嵌套 <b>。 */
+  function cbtSegTxt(x) {
+    const seg = [x.base, x.persist, x.temp].filter(v => v != null && v !== 0);
+    return seg.length > 1 ? '（' + seg.map((v, i) => (i && v > 0 ? '+' : '') + v).join('') + '=' + x.total + '）' : '';
+  }
+  function cbtChip(cls, label, val, tip, main) {
+    return `<span class="tc-cbt ${cls}" title="${esc(tip)}">` +
+      `<i>${label}</i><b>${val}</b>${main ? `<em>${esc(main)}</em>` : ''}</span>`;
+  }
+  function combatStrip(o, extra) {
+    const chips = [];
+    if (o.cv) {
+      chips.push(cbtChip('cbt-atk tc-cva', '攻', o.cv.atk, o.cv.tipA, o.cv.main));
+      chips.push(cbtChip('cbt-def tc-cvd', '守', o.cv.def, o.cv.tipD, o.cv.main));
+    }
+    if (o.arm != null) chips.push(cbtChip('cbt-arm', '甲', o.arm.total, '护甲：装备提供的固定减伤，是 DR 的主要来源' + cbtSegTxt(o.arm)));
+    if (o.dr != null) chips.push(cbtChip('cbt-dr tc-dr', '减伤', o.dr.total, '减伤：绝对点数（护甲+被动常驻+临时），结算时从原始伤害里扣、最低扣到 1' + cbtSegTxt(o.dr)));
+    if (o.shd != null) chips.push(cbtChip('cbt-shd tc-shd', '护盾', o.shd.total, '护盾：独立缓冲池，先于 HP 扣、扣完即散、多源各记各账' + cbtSegTxt(o.shd)));
+    if (o.amp != null) chips.push(cbtChip('cbt-amp tc-amp', '增伤', o.amp.total, '增伤：造成的伤害加值（武器/技能/状态），结算时加在攻击侧' + cbtSegTxt(o.amp)));
+    if (!chips.length) return '';
+    return `<div class="tc-combat${extra ? ' ' + extra : ''}">${chips.join('')}</div>`;
   }
 
   /* 衍生数值同款三段表达式（v3.58.0）：`MOV 12+2-1=13`、`DB 14+3`。
@@ -774,7 +799,7 @@
     const p = seg(v);
     const o = {
       name: p[0] || '', badge: '', hp: null, sp: null, weight: null,
-      mov: null, db: null, dr: null, shd: null, amp: null, attrs: [], penalty: '', status: [],
+      mov: null, db: null, arm: null, dr: null, shd: null, amp: null, attrs: [], penalty: '', status: [],
       pts: '', sub: '', blood: '', lock: '', title: '', weapon: '',
     };
     const ratios = [];
@@ -793,10 +818,13 @@
       /* v3.60.0 防御/增益三键（与 MOV/DB 同构）：DR/减伤、SHD/护盾、AMP/增伤。
          键在数字前面才认——「无视2点减伤」这类倒装文本不中招，照旧走武器/状态路径。 */
       const dr = parseNumExpr(x, '(?:\\bDR\\b|减伤)'), shd = parseNumExpr(x, '(?:\\bSHD\\b|护盾|盾)'), amp = parseNumExpr(x, '(?:\\bAMP\\b|增伤)');
-      if (at.length || mv || db || dr || shd || amp) {
+      /* v3.62.0 护甲值：`ARM 9` / `护甲 9`——只认数字紧跟键的写法（`护甲 荒神铠（…）` 不中招） */
+      const arm = parseNumExpr(x, '(?:\\bARM\\b|护甲)');
+      if (at.length || mv || db || dr || shd || amp || arm) {
         o.attrs.push(...at);
         if (mv) o.mov = mv;
         if (db) o.db = db;
+        if (arm) o.arm = arm;
         if (dr) o.dr = dr;
         if (shd) o.shd = shd;
         if (amp) o.amp = amp;
@@ -1216,7 +1244,7 @@
 
   function parseMob(v) {
     const p = seg(v);
-    const o = { name: '', grade: '', hp: null, hpMax: null, hpUnknown: false, attrs: [], attrsUnknown: false, armor: '', status: [], target: '', intent: '', weak: '' };
+    const o = { name: '', grade: '', hp: null, hpMax: null, hpUnknown: false, attrs: [], attrsUnknown: false, armor: '', arm: null, dr: null, shd: null, amp: null, status: [], target: '', intent: '', weak: '' };
     const gradeRe = new RegExp('^(' + MOB_GRADE_SRC + ')$', 'i');
     const gradeIn = new RegExp('(' + MOB_GRADE_SRC + ')');
 
@@ -1246,6 +1274,14 @@
       if ((m = x.match(/^状态\s*(.*)$/))) { o.status = m[1].split(/[,，、]/).map(t => t.trim()).filter(Boolean); continue; }
       if ((m = x.match(/^目标\s*(.*)$/))) { o.target = m[1].trim(); o.sawTarget = true; continue; }
       if ((m = x.match(/^意图\s*(.*)$/))) { o.intent = m[1].trim(); continue; }
+      /* v3.62.0 mob 也吃战斗数值三键（与 p 行同一台机器） */
+      {
+        const mdr = parseNumExpr(x, '(?:\\bDR\\b|减伤)'), mshd = parseNumExpr(x, '(?:\\bSHD\\b|护盾)'), mamp = parseNumExpr(x, '(?:\\bAMP\\b|增伤)'), marm = parseNumExpr(x, '(?:\\bARM\\b|护甲)');
+        if (mdr || mshd || mamp || marm) {
+          if (mdr) o.dr = mdr; if (mshd) o.shd = mshd; if (mamp) o.amp = mamp; if (marm) o.arm = marm;
+          continue;
+        }
+      }
       if (grabHp(x)) continue;
 
       /* 七维属性段：`STR 45 DEX 38 …` / `全属性 45`（七项全同）/ `七维 未知`（未侦查） */
@@ -3058,13 +3094,10 @@
         ${p.sp ? `<div class="tc-vit"><span>💠 SP</span><b>${p.sp.cur}/${p.sp.max}</b>${bar(p.sp.cur, p.sp.max, 'sp')}</div>` : ''}
         ${p.weight ? `<div class="tc-vit"><span>📦 负重</span><b>${p.weight.cur}/${p.weight.max}</b>${bar(p.weight.cur, p.weight.max, 'wt')}</div>` : ''}
       </div>
+      ${combatStrip(p)}
       <div class="tc-nums">
-        ${p.cv ? `<span class="tc-cva" title="${p.cv.tipA}">🗡 攻·${p.cv.main} <b>${p.cv.atk}</b></span><span class="tc-cvd" title="${p.cv.tipD}">🛡 守·${p.cv.main} <b>${p.cv.def}</b></span>` : ''}
         ${p.mov != null ? `<span>🏃 MOV ${numHtml(p.mov)}</span>` : ''}
         ${p.db != null ? `<span>⚔️ DB ${numHtml(p.db)}</span>` : ''}
-        ${p.dr != null ? `<span class="tc-dr" title="减伤：绝对点数（护甲+被动常驻），结算时从原始伤害里扣，最低扣到 1">🪨 减伤 ${numHtml(p.dr)}</span>` : ''}
-        ${p.shd != null ? `<span class="tc-shd" title="护盾：独立缓冲池（点数），先于 HP 扣、扣完即散，多源各记各账">🛡 护盾 ${numHtml(p.shd)}</span>` : ''}
-        ${p.amp != null ? `<span class="tc-amp" title="增伤：造成的伤害加值（武器/技能/状态），结算时在攻击侧加上">💥 增伤 ${numHtml(p.amp)}</span>` : ''}
         ${p.weapon ? `<span class="tc-wpn">${esc(p.weapon)}</span>` : ''}
       </div>
       ${p.penalty ? `<div class="tc-pen">🩸 ${esc(p.penalty)}</div>` : ''}
@@ -3213,7 +3246,7 @@
       </div>
       ${hpTxt ? `<div class="tc-mob-bar"><i style="width:${pct}%"></i></div>` : ''}
       ${attrRow}
-      ${cv ? `<div class="tc-mob-cv" title="${cv.tipA} ｜ ${cv.tipD}">🗡 攻 <b>${cv.atk}</b> ｜ 🛡 守 <b>${cv.def}</b></div>` : ''}
+      ${combatStrip({ cv: cv, arm: m.arm || (function () { const n = String(m.armor || '').match(/\d+/); return n ? { total: +n[0], base: +n[0], persist: 0, temp: 0 } : null; })(), dr: m.dr, shd: m.shd, amp: m.amp }, 'tc-mob-cv')}
       <div class="tc-mob-meta">
         <span class="tc-mob-armor">🛡 ${esc(m.armor)}</span>
         ${sts.map(x => `<span class="tc-mob-st">${esc(x)}</span>`).join('')}
@@ -4415,6 +4448,24 @@
 .tc-nums .tc-shd b{color:#a9cdef;font-weight:600}
 .tc-nums .tc-amp{color:#e08a6d}
 .tc-nums .tc-amp b{color:#ffb59d;font-weight:600}
+
+/* v3.62.0 战斗数值条：攻/守/甲/减伤/护盾/增伤 各一枚筹码，独占一条横带（不再混在 MOV/DB 里） */
+.tc-combat{display:flex;flex-wrap:wrap;gap:5px;margin:7px 0 5px}
+.tc-cbt{display:inline-flex;flex-direction:column;align-items:center;justify-content:center;min-width:42px;padding:3px 8px 2px;border-radius:6px;border:1px solid;line-height:1.15;position:relative;background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.015))}
+.tc-cbt i{font-style:normal;font-size:9px;letter-spacing:.14em;opacity:.8;white-space:nowrap}
+.tc-cbt b{font-size:15px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:.02em}
+.tc-cbt em{font-style:normal;font-size:8px;opacity:.55;margin-top:1px;letter-spacing:.08em}
+.tc-cbt.cbt-atk{color:#ffd27a;border-color:rgba(255,210,122,.34);background:linear-gradient(180deg,rgba(255,190,80,.16),rgba(255,190,80,.03))}
+.tc-cbt.cbt-atk b{text-shadow:0 0 9px rgba(255,190,80,.45)}
+.tc-cbt.cbt-def{color:#a7e6d7;border-color:rgba(140,226,208,.32);background:linear-gradient(180deg,rgba(90,200,180,.14),rgba(90,200,180,.03))}
+.tc-cbt.cbt-def b{text-shadow:0 0 9px rgba(110,220,200,.4)}
+.tc-cbt.cbt-arm{color:#cbb896;border-color:rgba(203,184,150,.3);background:linear-gradient(180deg,rgba(180,160,120,.14),rgba(180,160,120,.03))}
+.tc-cbt.cbt-dr{color:#9db4c0;border-color:rgba(157,180,192,.3);background:linear-gradient(180deg,rgba(140,170,185,.13),rgba(140,170,185,.03))}
+.tc-cbt.cbt-shd{color:#8fc0f2;border-color:rgba(143,192,242,.36);background:linear-gradient(180deg,rgba(90,150,230,.17),rgba(90,150,230,.03))}
+.tc-cbt.cbt-shd b{text-shadow:0 0 9px rgba(110,170,255,.45)}
+.tc-cbt.cbt-amp{color:#ffb59d;border-color:rgba(255,160,130,.34);background:linear-gradient(180deg,rgba(255,120,80,.16),rgba(255,120,80,.03))}
+.tc-cbt.cbt-amp b{text-shadow:0 0 9px rgba(255,140,100,.45)}
+.tc-mob-cv{margin:5px 0 3px}
 .tc-pen{font-size:11.5px;color:#f8a5a5;background:rgba(248,113,113,.07);border-radius:5px;padding:2px 8px}
 .tc-tags{display:flex;flex-wrap:wrap;gap:4px}
 .tc-tags span{font-size:10.5px;color:#a9b8cc;background:rgba(255,255,255,.06);border-radius:5px;padding:1px 7px}
