@@ -9,7 +9,7 @@
   if (window.__twCardLoaded) return;
   window.__twCardLoaded = true;
 
-  const VERSION = '3.62.0';
+  const VERSION = '3.63.0';
 
   /* 面板尺寸偏好：紧凑(tc-mini)/完整。localStorage 持久化，点击 .tc-size 全局切换 */
   const SIZE_KEY = 'tw-card:size';
@@ -78,7 +78,13 @@
 
   /* ══════════ 基础工具 ══════════ */
 
-  const KEYS = 'scene|team|quest|check|result|world|next|bond[0-9]*|foe[0-9]*|nb[0-9]*|nf[0-9]*|nh[0-9]*|nd[0-9]*|nl[0-9]*|npc[0-9]*|kbnpc[0-9]*|ntrnpc[0-9]*|kbm[0-9]*|kbf[0-9]*|dmg[0-9]*|sh[0-9]*|dz[0-9]*|wh[0-9]*|pl[0-9]*|lk[0-9]*|kbmsk[0-9]*|kbfsk[0-9]*|pts[0-9]+|lock[0-9]+|ti[0-9]+|cr[0-9]+|p[0-9]+|sk[0-9]+|eq[0-9]+|mob[0-9]*|kbl[0-9]*|yz[0-9]*|bl[0-9]*|zw|ack|pace';
+  /* bs<N>：敌方技能暗牌。**刻意不渲染** ——
+     它是 AI 自己续写用的台账，玩家不该看见（技能一旦被看见，
+     玩家就能照着 CD 与通道排轴，伏击就不存在了）。
+     认它只为一件事：让这一行被正常解析、不进 orphans、也不让整块被
+     「无已定义状态键」守卫跳过（被跳过 = 原始文本留在消息里 = 正好泄露给玩家）。
+     st.bossSkills 目前没有任何渲染调用者，这是设计，不是漏写。 */
+  const KEYS = 'scene|team|quest|check|result|world|next|bond[0-9]*|foe[0-9]*|nb[0-9]*|nf[0-9]*|nh[0-9]*|nd[0-9]*|nl[0-9]*|npc[0-9]*|kbnpc[0-9]*|ntrnpc[0-9]*|kbm[0-9]*|kbf[0-9]*|dmg[0-9]*|sh[0-9]*|dz[0-9]*|wh[0-9]*|pl[0-9]*|lk[0-9]*|kbmsk[0-9]*|kbfsk[0-9]*|pts[0-9]+|lock[0-9]+|ti[0-9]+|cr[0-9]+|p[0-9]+|sk[0-9]+|eq[0-9]+|mob[0-9]*|bs[0-9]*|kbl[0-9]*|yz[0-9]*|bl[0-9]*|zw|ack|pace';
   const LINE_RE = new RegExp('^[ \\t]*(' + KEYS + ')[:：][ \\t]*(.*)$', 'i');
   /* 拓展键登记表（AGENTS.md §3.1 规则 7）四列：键前缀 | base 名 | 渲染器 | 主题 class
      （派生第五列 field = 状态对象存放字段）。编号一律按「键前缀长度」取，禁字面量偏移
@@ -1242,6 +1248,29 @@
     return o;
   }
 
+  /* ── bs<N>：敌方技能暗牌 ──
+     契约示例（竖线或全角竖线分段）：
+       bs1: 艾斯德斯 | 主 冰岚大将军 群体3D6+DB×2段 穿甲 CD0/5·2 口 阻断施法 | 主 极寒突刺 3D6+DB 真实每场1 CD0/5·2 口 位移脱离
+     设计要点：
+     1) **只解析，不渲染**。它的用途是给 AI 一个必须落笔的台账——写了 CD、写了通道、写了「口」，
+        下一轮才有东西可对账；玩家看不到，所以也不能靠它作弊。
+     2) 段数不设上限、格内文字不校验：这一行不产出任何玩家可见信息，校验只会变成假警报。
+     3) 名字段缺失时按「没有名字」处理，所有段都当格。 */
+  function parseBossSkill(v) {
+    const p = seg(v);
+    const o = { name: '', cells: [], raw: String(v || '').trim() };
+    if (p.length) {
+      const head = p[0].trim();
+      if (head && !/^(主|被|被动|主动)\b/.test(head)) {
+        o.name = head;
+        for (let i = 1; i < p.length; i++) if (p[i].trim()) o.cells.push(p[i].trim());
+      } else {
+        for (let i = 0; i < p.length; i++) if (p[i].trim()) o.cells.push(p[i].trim());
+      }
+    }
+    return o;
+  }
+
   function parseMob(v) {
     const p = seg(v);
     const o = { name: '', grade: '', hp: null, hpMax: null, hpUnknown: false, attrs: [], attrsUnknown: false, armor: '', arm: null, dr: null, shd: null, amp: null, status: [], target: '', intent: '', weak: '' };
@@ -1519,7 +1548,7 @@
     const st = {
       scene: '', team: '', quest: null, checks: [],
       players: [], npcs: [], kbnpcs: [], ntrnpcs: [], bonds: [], foes: [], mobs: [], ntrBonds: [], ntrFoes: [], ntrHearts: [], ntrFalls: [], ntrLogs: [], mechas: [], familiars: [], dmgs: [], shelters: [], disasters: [], warehouses: [], places: [], geneLocks: [], crOrphans: [], orphans: [], ack: null, pace: null, zw: null, kbls: [], yzs: [], bls: [],
-      result: '', world: '', next: '',
+      result: '', world: '', next: '', bossSkills: [],
     };
     const pmap = new Map(), smap = new Map(), emap = new Map();
     const bmap = new Map(), fmap = new Map(), nmap = new Map();
@@ -1537,6 +1566,7 @@
       return false;
     };
     const mmap = new Map(), kmmap = new Map(), kfmap = new Map();
+    const bskmap = new Map();
     const mskmap = new Map(), fskmap = new Map();
     const gmap = new Map();
     const shmap = new Map(), dzmap = new Map();
@@ -1602,9 +1632,12 @@
         const mob = parseMob(v);
         if (mob.name && !/^(无|—|-)$/.test(mob.name)) mmap.set(k === 'mob' ? 1 : +k.slice(3), mob);
       }
+      else if (/^bs\d*$/.test(k)) bskmap.set(k === 'bs' ? 1 : +k.slice(2), parseBossSkill(v));
     }
 
     st.checks = checks;
+    /* 敌方技能暗牌：只进 st，不进任何 render。顺序按键序（bs1, bs2, …）稳定。 */
+    st.bossSkills = [...bskmap.keys()].sort((a, b) => a - b).map(k => bskmap.get(k));
     st.players = [...pmap.keys()].sort((a, b) => a - b).map(i => {
       const p = pmap.get(i);
       p.idx = i;
@@ -2308,7 +2341,17 @@
   const NAME_PLACEHOLDER = /^(无|没有|空|—|–|-|none|null)$/i;
   /* 满侧速记：`解 全`＝正树十枚全亮（v3.61.0，世界书同口径） */
   const KBL_FULL_RE = /^(全|满|全部|all)$/i;
-  const nameList = (s) => String(s || '').split(/[\s、,，·]+/).filter(Boolean).filter(x => !NAME_PLACEHOLDER.test(x));
+  /* v3.62.1 双词名：逆树「胜利」的壳名是 `A'arab Zaraq`——名字本身带空格，而名单按空格分段，
+     于是世界书照抄名对照表写出来的正确写法，会被切成 `A'arab` + `Zaraq` 两个未识别 token，
+     `用` 少算一格、面板连报两条黄字。**错的是切分，不是卡**：先把这枚名字换成私用区占位，
+     切完再还原，段数与其他名字完全同构。别在这里做「合并相邻 token」——那会顺手吃掉
+     模型真写错时该报的黄字。 */
+  const PAIR_SLOT = '\uE000';
+  const nameList = (s) => String(s || '')
+    .replace(/A[’']?arab[\s_]+Zaraq/gi, PAIR_SLOT)
+    .split(/[\s、,，·]+/).filter(Boolean)
+    .map(x => x === PAIR_SLOT ? "A'arab Zaraq" : x)
+    .filter(x => !NAME_PLACEHOLDER.test(x));
   const shade = (hex, f) => {
     const n = parseInt(String(hex).replace('#', ''), 16);
     const r = Math.round(((n >> 16) & 255) * f), g = Math.round(((n >> 8) & 255) * f), b = Math.round((n & 255) * f);
@@ -2334,6 +2377,8 @@
     m['根基'] = '基础';
     m['Kether'] = '王冠'; m['Chokmah'] = '智慧'; m['Chochmah'] = '智慧';
     m['Tiphareth'] = '美'; m['Tiphereth'] = '美'; m['Daat'] = '王冠';
+    /* A'arab Zaraq 的常见简写：旧卡写 `A'ar`（上一版世界书示例就这么写）不该整枚判死 */
+    m["A'ar"] = '胜利'; m["A'arab"] = '胜利'; m['Aarab'] = '胜利';
     return m;
   })();
   const kblNorm = (n) => {
@@ -2455,7 +2500,14 @@
       if (k === '树') { if (/^(正|逆|双)$/.test(val)) o.tree = val; else o.errs.push('树 只认 正/逆/双：' + val); }
       else if (k === '阶') o.stage = val;                    /* 不透明字符串，原样显示 */
       /* v3.61.0 「全」速记：满侧写 `解 全` / `逆 全`，面板展开成十枚——全解锁不用挨个记名字 */
-      else if (k === '解') { o.slots = KBL_FULL_RE.test(val) ? KBL_ORDER.map(n => ({ name: n, pts: null })) : parseYzSlots(val); o.solved = o.slots.map(x => kblNorm(x.name)); }
+      /* v3.62.1 `解 无` 折成空数组：世界书规定「为空写 无，无 不是质点名、不参与识别与计数」。
+         逆 侧一直走 nameList（自带占位符过滤），解 侧走 parseYzSlots —— 不补这一步，
+         照规矩写的 `解 无` 会被当成自创质点报黄字。 */
+      else if (k === '解') {
+        if (NAME_PLACEHOLDER.test(val)) { o.slots = []; o.solved = []; }
+        else if (KBL_FULL_RE.test(val)) { o.slots = KBL_ORDER.map(n => ({ name: n, pts: null })); o.solved = o.slots.map(x => kblNorm(x.name)); }
+        else { o.slots = parseYzSlots(val); o.solved = o.slots.map(x => kblNorm(x.name)); }
+      }
       else if (k === '逆') o.inversed = KBL_FULL_RE.test(val) ? KBL_ORDER.slice() : nameList(val).map(kblNorm);
       else if (k === '激') o.actRaw = val;                  /* 槽数面板按阶算，不采信写法 */
       else if (k === '用') o.usedRaw = val;                  /* 面板重算，不采信写法 */
@@ -4108,7 +4160,10 @@
           const meaningful = st.players.length || st.mechas.length || st.familiars.length || st.dmgs.length || st.scene || st.mobs.length ||
             st.bonds.length || st.foes.length || st.npcs.length ||
             st.ntrBonds.length || st.ntrFoes.length || st.ntrHearts.length || st.ntrFalls.length || st.ntrLogs.length ||
-            st.checks.length || st.quest || st.next || st.result || st.world || st.team;
+            st.checks.length || st.quest || st.next || st.result || st.world || st.team ||
+            /* bossSkills 必须计入：它不渲染，但若整块只剩它就被判「无键」 -> break
+               -> 原始文本留在消息里 -> 玩家正好看见技能暗牌。这一条是防泄露的。 */
+            (st.bossSkills && st.bossSkills.length);
           if (!meaningful) break;
 
           const holder = DOC.createElement('div');
