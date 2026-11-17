@@ -9,7 +9,7 @@
   if (window.__twCardLoaded) return;
   window.__twCardLoaded = true;
 
-  const VERSION = '3.66.0';
+  const VERSION = '3.67.0';
 
   /* 面板尺寸偏好：紧凑(tc-mini)/完整。localStorage 持久化，点击 .tc-size 全局切换 */
   const SIZE_KEY = 'tw-card:size';
@@ -1073,6 +1073,33 @@
             + ' → 差 ' + fmtN(real) + '，卡上写 ' + fmtN(g));
       }
     }
+    /* ⑦ 有效 == 各掷 + |AD|（占优侧）／有效 == 各掷（劣势侧），容差 0。
+          ⑤⑥ 验的都是「这张卡内部自洽」—— 模型把 `有效` 直接抄 `各掷`，再把 `差` 按这个错的
+          `有效` 反算出来，三条数字互相印证、全都对得上，而 AD 一个字都没加上去：这正是
+          「对抗时 AD 没被应用」在卡面上的样子，⑤⑥ 对它完全是绿的。
+          占优侧不是「总是攻方」：`叶临→艾斯德斯 | AD −289` 里占优的是守方。
+          `—/—`（碾压）取不到数就跳过，不猜。 */
+    const rp = (function (t) {
+      const m = String(t == null ? '' : t).match(/^\s*(-?\d+)\s*\/\s*(-?\d+)\s*$/);
+      return m ? { atk: +m[1], def: +m[2] } : null;
+    })(c.rollPair);
+    if (ad != null && c.eff && rp && c.eff.atk != null && c.eff.def != null) {
+      const win = ad > 0 ? 'atk' : (ad < 0 ? 'def' : null);
+      const lose = ad > 0 ? 'def' : (ad < 0 ? 'atk' : null);
+      const wantExp = { atk: rp.atk, def: rp.def };
+      if (win) wantExp[win] = rp[win] + Math.abs(ad);
+      const badWin = win ? Math.abs(c.eff[win] - wantExp[win]) > 0.01 : false;
+      const badLose = lose ? Math.abs(c.eff[lose] - wantExp[lose]) > 0.01 : false;
+      const badZero = !win && (Math.abs(c.eff.atk - rp.atk) > 0.01 || Math.abs(c.eff.def - rp.def) > 0.01);
+      if (badWin || badLose || badZero) {
+        /* 一条卡最多报一条：两侧都错也只报占优侧那条 —— 占优侧是「AD 到底加没加上」的直接证据，
+           两侧各报一条会让同一处错误在页面上出现两遍。 */
+        out.push((c.title ? c.title + ' 的 ' : '')
+          + '有效 写 ' + fmtN(c.eff.atk) + '/' + fmtN(c.eff.def)
+          + '，按 AD' + brN(ad) + ' 应为 ' + fmtN(wantExp.atk) + '/' + fmtN(wantExp.def));
+      }
+    }
+
     return out;
   }
 
