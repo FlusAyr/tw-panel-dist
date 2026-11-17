@@ -9,7 +9,7 @@
   if (window.__twCardLoaded) return;
   window.__twCardLoaded = true;
 
-  const VERSION = '3.67.0';
+  const VERSION = '3.69.0';
 
   /* 面板尺寸偏好：紧凑(tc-mini)/完整。localStorage 持久化，点击 .tc-size 全局切换 */
   const SIZE_KEY = 'tw-card:size';
@@ -123,7 +123,10 @@
 
   function skillOver(n, label, cap) {
     if (!(n > cap)) return '';
-    return `<em class="tc-killwarn tc-skcap">⚠ ${label} ${n} 个，上限 ${cap} —— 必须删除或融合一个</em>`;
+    /* v3.69.0 · 不画 ⚠：超上限是事实，不是指控。玩家改不了模型的写法，
+       「必须删除或融合一个」这句话只能由规则层说。 */
+    bumpTag('skcap');
+    return `<em class="tc-skcap">${label} ${n}/${cap}（上限 ${cap}）· 第 ${cap + 1} 项起未生效</em>`;
   }
 
   /* 小方点：上限是「看得见的槽位」，点数是 cap（玩家 9 个、机甲/使魔 5 个）。
@@ -160,7 +163,7 @@
     if (!count) return '';
     const over = count > cap;
     return `<details class="tc-fold tc-skfold ${theme}${over ? ' over' : ''}">
-        <summary><em class="tc-skfl-t">技能</em><b class="tc-skfl-n">${count}/${cap}${over ? ' ⚠' : ''}</b><i class="tc-skfl-pips">${skillPips(count, cap)}</i><span class="tc-skfl-ar"></span></summary>
+        <summary><em class="tc-skfl-t">技能</em><b class="tc-skfl-n">${count}/${cap}${over ? ' 超' : ''}</b><i class="tc-skfl-pips">${skillPips(count, cap)}</i><span class="tc-skfl-ar"></span></summary>
         ${over ? skillOver(count, '技能', cap) : ''}
         <div class="tc-skills">${items.map(sk => `
           <div class="tc-skill${sk.cdCur > 0 ? ' cd-cool' : ''}"${sk.cdMax != null ? ` data-cd="${sk.cdCur || 0}/${sk.cdMax}"` : ''}>
@@ -816,8 +819,32 @@
       if (!x) continue;
 
       if (!o.badge && HEALTH.test(x.replace(/[:：]/g, ''))) { o.badge = x; continue; }
-      if (/^\d+\s*\/\s*\d+\s*(kg)?$/i.test(x)) { ratios.push(pair(x)); continue; }
-      if (/^\d+\.\d+\s*\/\s*\d+(?:\.\d+)?\s*(kg)?$/i.test(x) || /^\d+\s*\/\s*\d+\.\d+\s*(kg)?$/i.test(x)) { floats.push(pairNum(x)); continue; }
+      /* v3.68.0：世界书 p 行模板写的是 `HP当前/最大 ｜ SP当前/最大 ｜ 负重当前/上限`，
+         从没说「不许带 HP 字样」，于是模型写 `HP 199/199` 完全合规 —— 而老正则只认裸数字，
+         HP/SP/负重 三段全被丢进 status，变成徽章区里三个无名数字，卡上 HP 那条干脆不出现。
+         文档允许的写法，解析器必须认：标签可有可无，认到了就连标签一起吃掉（不再残留）。
+         负重仍只认「带 kg」或「标签是负重/负载/重量」或「带小数」的那一段。 */
+      const RM = x.match(/^(HP|生命值?|SP|法力值?|MP|负重|负载|重量)?\s*(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)\s*(?:kg|KG)?$/);
+      if (RM) {
+        const lab = RM[1] || '', rv = { cur: +RM[2], max: +RM[3] };
+        const dec = String(RM[2]).indexOf('.') >= 0 || String(RM[3]).indexOf('.') >= 0;
+        /* 标签优先：写了 `HP` 就是 HP，哪怕它带小数。hp/sp 只吃整数 —— 带小数的 HP
+           是模型把负重/百分比抄到 HP 位置上了，留在 status 里让人看见，不硬塞进血条。 */
+        if (/^(HP|生命值?)$/.test(lab)) {
+          if (dec) o.status.push(x);
+          else if (o.hp == null) o.hp = rv;
+        } else if (/^(SP|法力值?|MP)$/.test(lab)) {
+          if (dec) o.status.push(x);
+          else if (o.sp == null) o.sp = rv;
+        } else if (/^(负重|负载|重量)$/.test(lab)) {
+          if (o.weight == null) o.weight = rv;
+        } else if (/kg|KG/.test(x) || dec) {
+          if (o.weight == null) o.weight = rv;   /* 无标签：kg 或小数只可能是负重 */
+        } else {
+          ratios.push(rv);   /* 无标签：老卡靠顺序（1=HP 2=SP 3=负重） */
+        }
+        continue;
+      }
 
       const at = parseAttrs(x);
       const mv = parseNumExpr(x, 'MOV'), db = parseNumExpr(x, '\\bDB');
@@ -861,11 +888,12 @@
       o.status.push(x);
     }
 
-    if (ratios.length >= 1) o.hp = ratios[0];
-    if (ratios.length >= 2) o.sp = ratios[1];
+    /* 带标签的段已在循环里各就各位，这里只补无标签的老卡（按顺序） */
+    if (o.hp == null && ratios.length >= 1) o.hp = ratios[0];
+    if (o.sp == null && ratios.length >= 2) o.sp = ratios[1];
     /* 负重优先用小数段；没有小数段才退回第三个整数比值 */
-    if (floats.length) o.weight = floats[0];
-    else if (ratios.length >= 3) o.weight = ratios[2];
+    if (o.weight == null && floats.length) o.weight = floats[0];
+    if (o.weight == null && ratios.length >= 3) o.weight = ratios[2];
     o.cv = compoundVals(o.attrs);   /* v3.59.0 复合攻/守值 */
     return o;
   }
@@ -1024,12 +1052,49 @@
     while ((m = re.exec(t))) { const x = +m[2]; sum += (m[1] === '-' || m[1] === '−') ? -x : x; n++; }
     return n ? sum : null;
   };
+  /* AD 专职解析 —— 一行里必须写三个数的地方，不能用「取首个数字」的通用解析。
+     `AD 105-92=+13` 用 numOf 会取到 105，于是 |105|>100，凭空报出「结论应是碾压」「不该再掷骰」
+     两条假警告：卡是对的，解析器不认。格式换过、解析器没换，两份事实就开始漂。
+     优先级（先命中先用）：① 含 `=` 取最后一个 `=` 之后的结果数 → ② 结尾带符号整数 →
+     ③ 全文唯一裸整数（旧卡 `AD 100`）→ ④ 含「碾压」「无」→ null（不判）。
+     返回 { v, malformed }：`=` 两侧都有数但 左 − 右 ≠ 结果 → '算式不等'；只有一侧有数 → '算式不全'。*/
+  const adOf = function (v) {
+    const t = String(v == null ? '' : v).replace(/[−–—－]/g, '-');
+    const one = /^\s*([+-]?\d+(?:\.\d+)?)\s*$/;
+    /* 三步式：a op b = c（`=` 左边是算式、右边是结果） */
+    const full = t.match(/(\d+(?:\.\d+)?)\s*([-+])\s*(\d+(?:\.\d+)?)\s*=\s*([+-]?\d+(?:\.\d+)?)/);
+    if (full) {
+      const a = +full[1], b = +full[3], c = +full[4];
+      const want = full[2] === '-' ? a - b : a + b;
+      return { v: c, malformed: Math.abs(want - c) > 0.01 ? '算式不等' : '' };
+    }
+    const iEq = t.lastIndexOf('=');
+    if (iEq >= 0) {
+      const R = t.slice(iEq + 1), L = t.slice(0, iEq);
+      const ln = L.match(/-?\d+(?:\.\d+)?/g), rn = R.match(/-?\d+(?:\.\d+)?/g);
+      const m = R.match(one);
+      /* 一侧有数、另一侧没有：结果读不出来，但算式本身就不全，得说一声 */
+      if (!ln || !rn) return { v: m ? +m[1] : null, malformed: '算式不全' };
+      return { v: m ? +m[1] : null, malformed: '' };
+    }
+    /* 结尾带符号整数：`+13` / `-11` / `−289`（已归一成 `-289`） */
+    const signed = t.match(/([+-]\d+(?:\.\d+)?)\s*$/);
+    if (signed) return { v: +signed[1], malformed: '' };
+    /* 全文唯一裸整数（旧卡 `AD 100`）；出现两个以上数字却既没有 `=` 也没有符号位 → 不敢猜 */
+    const all = t.match(/-?\d+(?:\.\d+)?/g);
+    if (all && all.length === 1) return { v: +all[0], malformed: '' };
+    if (all && all.length > 1) return { v: null, malformed: '算式不全' };
+    /* `AD 无` / `AD 碾压`：没有数就是没有 AD，不判 */
+    return { v: null, malformed: '' };
+  };
   const fmtN = (v) => (Number.isInteger(v) ? String(v) : String(Math.round(v * 10) / 10));
   const brN = (v) => (v < 0 ? '(' + fmtN(v) + ')' : fmtN(v));
   function checkAudit(c) {
     const out = [];
     if (!c || c.none) return out;
-    const add = numOf(c.add), total = numOf(c.total), dc = numOf(c.dc), ad = numOf(c.ad), roll = numOf(c.roll);
+    const add = numOf(c.add), total = numOf(c.total), dc = numOf(c.dc), roll = numOf(c.roll);
+    /* AD 单独走 adOf：`AD 105-92=+13` 里的 105 是算式左项，不是 AD */
+    const AO = adOf(c.ad), ad = AO.v;
     /* ① 加值 vs 加值构成 */
     if (c.addParts) {
       const w = add, k = sumOf(c.addParts);
@@ -1062,6 +1127,11 @@
       if (c.rollPair && !/^\s*[—\-–]\s*\/\s*[—\-–]\s*$/.test(c.rollPair))
         out.push('AD ' + brN(ad) + ' 已过百，不该再掷骰，各掷应是 —/—，卡上写「' + c.rollPair + '」');
     }
+    /* ⑤b AD 写了算式就必须三个数都对得上。算式不等比 AD 本身更早出错：
+           写 `105-92=+99` 的卡，后面每一条结论都建立在错的 AD 上，而卡面看不出哪里错。 */
+    if (AO.malformed)
+      out.push((c.title ? c.title + ' 的 ' : '') + 'AD 算式：' + AO.malformed
+        + '（AD 105-92=+13 这种要三个数都对得上）');
     /* ⑥ |AD|≤100 时 `差` 必须等于 |有效攻−有效守|（容差 0）。
           `差` 是给人看的结论数，`有效` 是掷骰前的实际筹码 —— 两者对不上＝这张卡自相矛盾。 */
     if (ad != null && Math.abs(ad) <= 100 && c.eff && c.gap) {
@@ -1476,6 +1546,20 @@
   /* 同上：DC构成 多段的软提示、值对账结果，只给 diag() 读，不进卡面 */
   let lastCheckHints = [];
   let lastAdAudit = [];
+  /* v3.69.0 · 卡面零警告：下面七类「判对错」的提示只算不显示，聚合存这里给 diag() 读。
+     玩家的卡面从这版起没有任何 ⚠；想找回来只需改一处渲染点，不必重写解析。 */
+  let lastAudit = { ad: [], cap: [], verdict: [], dual: [], ack: [], dbf: [], enemy: [] };
+  /* 对抗卡（details.tc-check）内部那几条也在同一族里：只算不显示，单独一栏给 diag() */
+  let lastCheckAudit = [];
+/* v3.69.0 · kb 系判错信息的缓冲：卡巴拉/源质/咒波/负向状态都在 render 前段就画完，
+   而 audit 对象要到日志段才建 —— 先写这个数组，audit.kb 直接引用它。 */
+let kbWarnBuf = [];
+/* v3.69.0 · 分类计数：卡面零 ⚠ 之后，判据只剩 diag() 一条出口。
+   但「某一类到底出没出、出几条」仍然要能按类核 —— 否则撤上屏就顺手把可观测性一起撤了。
+   audit 给的是「按通道」（ad/cap/ack…），auditTags 给的是「按原来的类」（kill/state/cd…），
+   两者同源：每处 push 都紧跟一次 bumpTag。 */
+let auditTags = {};
+function bumpTag(k) { auditTags[k] = (auditTags[k] || 0) + 1; }
 
   /* ── dmg<N>：伤害事件行 ──
      契约示例：dmg1: 甲→乙 | 因 链锯剑·横扫 | 算 1D8+2 +4 +20% −3 | 伤 撕裂·左臂 ·12 | 血 84→72 | 判 命中
@@ -1885,6 +1969,7 @@
        宁可漏一次，也不能让 ⚠ 出现在正常卡上（§7 #27）。 */
     st.adAudit = (function () {
       const out = [];
+      const rec = {};   /* 按角色名归并：同一栋楼里同名的攻/守两侧合成一条 */
       const ents = [].concat(st.players || [], st.mobs || []);
       (st.checks || []).forEach(function (c) {
         if (!c || !c.cvs) return;
@@ -1927,18 +2012,36 @@
         }
         /* 某一侧在 players+mobs 里找不到 → 那一侧不判，绝不转让给另一侧。
            「找不到就是找不到」，拿人家顶上等于制造一条错怪人的 ⚠。 */
-        if (A && A.cv && c.cvs.atk !== A.cv.atk)
-          out.push('⚠ ' + A.name + ' 的值写 ' + c.cvs.atk + '，卡上筹码 ' + A.cv.atk + '（攻）');
-        if (B && B.cv && c.cvs.def !== B.cv.def)
-          out.push('⚠ ' + B.name + ' 的值写 ' + c.cvs.def + '，卡上筹码 ' + B.cv.def + '（守）');
+        /* v3.68.0：一个角色一栋楼只留一条，两个方向合进同一句。
+           原先每个方向各报一条 —— 一个人最多两条、三个人六条，看着像满屏红，
+           而它抓的其实只有一件事：这一楼写的 `值` 不是这一楼 p 行七维算出来的那两个数。
+           阈值：某一侧相差 ≥3 才报（差 1~2 分是取整与显示误差，报了只会训练玩家忽略这行）。 */
+        const note = function (ent, written, calc, side) {
+          if (!ent || !ent.cv || written == null || calc == null) return;
+          const k = ent.name || '';
+          const r = rec[k] || (rec[k] = { name: k, aW: null, aC: null, dW: null, dC: null });
+          if (side === 'atk') { r.aW = written; r.aC = calc; }
+          else { r.dW = written; r.dC = calc; }
+        };
+        if (A && A.cv) note(A, c.cvs.atk, A.cv.atk, 'atk');
+        if (B && B.cv) note(B, c.cvs.def, B.cv.def, 'def');
       });
-      /* 同名 + 同数值 + 同一侧，只报一次：246 被挂两遍只会让人以为有两处错 */
-      const seen = {};
-      return out.filter(function (t) {
-        if (seen[t]) return false;
-        seen[t] = 1;
-        return true;
+      Object.keys(rec).forEach(function (k) {
+        const r = rec[k];
+        const badA = r.aW != null && r.aC != null && Math.abs(r.aW - r.aC) >= 3;
+        const badD = r.dW != null && r.dC != null && Math.abs(r.dW - r.dC) >= 3;
+        if (!badA && !badD) return;
+        /* 写的一侧缺就只摆现有的那侧，不补 0、不猜 */
+        const wrote = (r.aW != null && r.dW != null) ? (r.aW + '/' + r.dW)
+          : String(r.aW != null ? r.aW : r.dW);
+        const calc = [];
+        if (r.aC != null) calc.push('攻 ' + r.aC);
+        if (r.dC != null) calc.push('守 ' + r.dC);
+        bumpTag('ad');
+        out.push('⚠ ' + r.name + ' 的值与卡上筹码不符：写 ' + wrote + '，卡上 ' + calc.join(' / ')
+          + '（按本楼 p 行七维算，可能还没同步）');
       });
+      return out;
     })();
 
     st.enemyAudit = (function () {
@@ -3085,7 +3188,7 @@
       (dots || '<span class="kb-pdots-empty">解析 —</span>') +
       '<span class="kb-grace' + (grace ? ' on' : '') + '">' + (grace ? '恩典可用（≥5）' : '恩典 需 5') + '</span>' +
       (over ? '' : '<span class="kb-sover">过载 还差 ' + (KBL_SCALE_MAX - a) + '</span>') +
-      (warn9 ? '<span class="kb-snear">⚠ 逼近过载</span>' : '') +
+      (warn9 ? (bumpTag('snear'), '<span class="kb-snear">逼近过载</span>') : '') +
       '</div>';
 
     return '<div class="kb-scale">' + scale +
@@ -3116,11 +3219,13 @@
         + lf
         + '</div>';
     }).join('');
-    const wn = arr.reduce(function (a, d) { return a.concat(d.warns || []); }, [])
-      .map(function (w) { return '<div class="kb-warn">⚠ ' + esc(w) + '</div>'; }).join('');
+    /* v3.69.0 · 判错只进 diag().audit.kb，卡面不画 */
+    arr.forEach(function (d) {
+      (d.warns || []).forEach(function (w) { kbWarnBuf.push('负向状态「' + d.name + '」：' + w); bumpTag('dbuff'); });
+    });
     return '<div class="dbf-wrap" data-dbf="' + esc(tag) + '">'
       + '<div class="dbf-hd"><b>DEBUFF</b><i>负向 ' + arr.length + (perm ? ' · 永久 ' + perm : '') + '</i></div>'
-      + '<div class="dbf-list">' + rows + '</div>' + wn + '</div>';
+      + '<div class="dbf-list">' + rows + '</div>' + '</div>';
   }
 
   function renderKbl(k, owner, sc, entry) {
@@ -3133,10 +3238,12 @@
     const ss = grade === 'SS' || grade === 'SSS';
     const sss = grade === 'SSS';
     const open = foldOpen(owner || 'p1', 'kbl', k.used);
+    /* v3.69.0 · 「未识别」是回执（照原样显示），留文字去掉 ⚠；判错的进 audit */
+    k.bad.forEach(function () { bumpTag('kblbad'); });
+    (k.warns || []).forEach(w => { kbWarnBuf.push('卡巴拉：' + w); bumpTag('kbl'); });
+    ((sc && sc.warns) || []).forEach(w => { kbWarnBuf.push('卡巴拉解析：' + w); bumpTag('kblparse'); });
     const warn = (k.bad.length
-      ? `<div class="kb-warn">⚠ 未识别的质点名（照原样显示，不当作解析错误）：${esc(k.bad.join('、'))}</div>` : '')
-      + (k.warns || []).map(w => `<div class="kb-warn">⚠ ${esc(w)}</div>`).join('')
-      + ((sc && sc.warns) || []).map(w => `<div class="kb-warn">⚠ ${esc(w)}</div>`).join('');
+      ? `<div class="kb-warn">未识别的质点名（照原样显示）：${esc(k.bad.join('、'))}</div>` : '');
     const cls = `tc-kbl grade-${grade} ${open ? 'open' : 'closed'}${ss ? ' dual' : ''}${sss ? ' full' : ''}`;
     return `<div class="${cls}" data-fold="${esc((owner || 'p1') + '|kbl')}" data-grade="${grade}">` +
       `<div class="kf-hd" role="button" tabindex="0">` +
@@ -3242,9 +3349,11 @@
     if (extraTw.length) twWarns.push(`解 + 未 ≠ 六元（六项对不上）：多 ${extraTw.join('、')}`);
     const unkRes = (y.research || []).filter(r => YZ_RESEARCH.indexOf(r.name) < 0).map(r => r.name);
     if (unkRes.length) twWarns.push(`研 项名不在闭集（照原样显示，不计格数）：${unkRes.join('、')}`);
+    /* v3.69.0 · 同上：回执留文字，判定进 audit */
+    y.bad.forEach(function () { bumpTag('yzbad'); });
+    twWarns.forEach(w => { kbWarnBuf.push('源质：' + w); bumpTag('yzwarn'); });
     const warn = (y.bad.length
-      ? `<div class="kb-warn">⚠ 未识别的元名（照原样显示，不当作解析错误）：${esc(y.bad.join('、'))}</div>` : '')
-      + twWarns.map(w => `<div class="kb-warn">⚠ ${esc(w)}</div>`).join('');
+      ? `<div class="kb-warn">未识别的元名（照原样显示）：${esc(y.bad.join('、'))}</div>` : '');
     const cap = y.cap == null ? 7 : y.cap;
     const ptsTxt = (n) => {
       if (!on.has(n)) return '未解锁';
@@ -3383,6 +3492,7 @@
     const gapPips = Array.from({ length: 5 }, (_, i) => `<s class="${i < (z.gap || 0) ? 'on' : ''}"></s>`).join('');
     const rotMax = Math.max(5, z.rot || 0);
     const rotPips = Array.from({ length: rotMax }, (_, i) => `<s class="${i < (z.rot || 0) ? 'on' : ''}"></s>`).join('');
+    (z.warns || []).forEach(w => { kbWarnBuf.push('咒波：' + w); bumpTag('zw'); });
     const stele = z.stele
       ? `<i class="zw-stele" data-stele="${esc(z.stele)}">碑 ${esc(z.stele)}</i>` : '';
     return `<div class="tc-zw" data-conc="${conc == null ? '' : conc}" data-band="${z.band}" data-gap="${z.gap || 0}" data-rot="${z.rot || 0}">` +
@@ -3390,9 +3500,8 @@
         `<span class="zw-conc">${esc(showConc)}<s>/100</s></span></div>` +
       `<div class="zw-bar" data-band="${z.band}">${segs}${fills}${ticks}</div>` +
       `<div class="zw-pips"><b>裂隙</b>${gapPips}<b>腐化</b>${rotPips}</div>` +
-      (z.warns || []).map(w => `<div class="kb-warn">⚠ ${esc(w)}</div>`).join('') +
-      ((z.errs || []).length
-        ? `<div class="kb-warn">⚠ 未识别的段（照原样保留）：${esc((z.errs || []).join(' ｜ '))}</div>`
+      ((z.errs || []).forEach(function () { bumpTag('zwerrs'); }), (z.errs || []).length
+        ? `<div class="kb-warn">未识别的段（照原样保留）：${esc((z.errs || []).join(' ｜ '))}</div>`
         : '') +
       `</div>`;
   }
@@ -3413,7 +3522,7 @@
     const pills = (p.ptsRow || p.lockRow || p.tiRow || (p.crRow && p.crRow.length)) ? `
       <div class="tc-pills">
         ${p.ptsRow && p.ptsRow.total ? `<span class="tc-pill pts">✦ ${esc(p.ptsRow.total)}${p.ptsRow.ranks ? ` · ${esc(p.ptsRow.ranks)}` : ''}</span>` : ''}
-        ${p.lockRow && p.lockRow.stage ? `<span class="tc-pill lock${/三阶|四阶|五阶/.test(p.lockRow.stage) ? ' hi' : ''}${p.lockRow.over && !/^0/.test(p.lockRow.over) ? ' warn' : ''}">${esc(p.lockRow.stage)}${p.lockRow.devil && !/^(无|未度)$/.test(p.lockRow.devil) ? ' · 心魔' + esc(p.lockRow.devil) : ''}${p.lockRow.over && !/^0/.test(p.lockRow.over) ? ' ⚠' + esc(p.lockRow.over) : ''}</span>` : ''}
+        ${p.lockRow && p.lockRow.stage ? `<span class="tc-pill lock${/三阶|四阶|五阶/.test(p.lockRow.stage) ? ' hi' : ''}${p.lockRow.over && !/^0/.test(p.lockRow.over) ? ' warn' : ''}">${esc(p.lockRow.stage)}${p.lockRow.devil && !/^(无|未度)$/.test(p.lockRow.devil) ? ' · 心魔' + esc(p.lockRow.devil) : ''}${p.lockRow.over && !/^0/.test(p.lockRow.over) ? (bumpTag('lockover'), ' · 超标 ' + esc(p.lockRow.over)) : ''}</span>` : ''}
         ${p.tiRow && p.tiRow.cn ? `<span class="tc-pill ti">${esc(p.tiRow.cn)}${p.tiRow.en ? ' <i>' + esc(p.tiRow.en) + '</i>' : ''}</span>` : ''}
         ${(p.crRow || []).map(r => `<span class="tc-pill cr">◈ ${esc(r.name)} <b>${esc(r.val)}</b></span>`).join('')}
       </div>${p.crDup ? `<div class="tc-crwarn">cr${p.idx} 出现 ${p.crDup.times} 次，后一条覆盖前一条（前一条的 ${p.crDup.lost} 段丢失）</div>` : ''}` : '';
@@ -3487,19 +3596,21 @@
       return mm ? ['📌 ' + mm[1], mm[2]] : ['📌 补充', f];
     });
     const allRows = rows.concat(extraRows);
+    /* v3.69.0 · 判据照算（下面 lastCheckAudit 存快照），但卡面一个 ⚠ 都不画。
+       撤掉的不只是那三行正文：`⚠ N` 那枚角标每张对抗卡都挂着一个「我判你有几条错」，
+       收起来以后它只会恒显示 ⚠ 0 或变成一个点不开的死角标 —— 那比正文更烦人。 */
     const aud = checkAudit(c);
+    if (aud.length) lastCheckAudit.push({ title: c.title || '本轮判定', items: aud.slice() });
 
     return `<details class="tc-check"${i === 0 ? ' open' : ''}>
       <summary>
         <b>🎲</b><span class="tc-ctitle">${esc(c.title || '本轮判定')}</span>
         ${c.grade ? `<u class="${/失败/.test(c.grade) ? 'bad' : 'ok'}">${esc(c.grade)}</u>` : ''}
         ${c.ad ? `<em>${esc(c.ad)}</em>` : ''}
-        ${aud.length ? `<i class="tc-ckwarn" title="${esc(aud.join(' / '))}">⚠ ${aud.length}</i>` : ''}
       </summary>
       <div class="tc-cbody">
         ${allRows.map(r => `<div class="tc-crow"><span>${esc(r[0])}</span><b>${esc(r[1])}</b></div>`).join('')}
       </div>
-      ${aud.length ? `<div class="tc-ckaudit">${aud.map(t => `<div class="tc-ckline">⚠ ${esc(t)}</div>`).join('')}</div>` : ''}
       ${c.note ? `<div class="tc-cnote">📝 ${esc(c.note)}</div>` : ''}
       ${(c.cost || c.critfail) ? `<div class="tc-cfoot">${c.cost ? `⚡ 超限消耗：${esc(c.cost)}` : ''}${c.cost && c.critfail ? ' ｜ ' : ''}${c.critfail ? `极值范围：${esc(c.critfail)}` : ''}</div>` : ''}
     </details>`;
@@ -3886,6 +3997,10 @@
   }
 
   function render(st, prev) {
+    /* v3.69.0 · 对抗卡内的 audit 快照按楼层重来（renderCheck 在本函数前段就被调用） */
+    lastCheckAudit = [];
+  kbWarnBuf = [];
+  auditTags = {};
     /* 死核对账（v3.31.0）：结果/世界文字说了「没了」，但敌人 HP 还 > 0。 */
     st.killWarn = killWarnOf(st);
     st.weakWarns = weakWarnOf(st);
@@ -3903,7 +4018,8 @@
           我们只是不让它白屏；AI 把整块写成一行这件事必须被玩家看见，
           否则下一次它还会这么写、而且没人知道面板在替它兜。 ── */
     if (st.inlineSplit) {
-      out.push(`<div class="tc-split">⚠ 此行缺换行，已自动切分（${st.inlineSplit} 段）</div>`);
+      bumpTag('split');
+      out.push(`<div class="tc-split">此行缺换行，已自动切分（${st.inlineSplit} 段）</div>`);
     }
 
     /* ── 顶部指令栏 ── */
@@ -3970,7 +4086,7 @@
           (paceRestTotal ? ' · 累计喘息 ' + paceRestTotal : '') + defChip + paceReset + '</span>');
       } else {
         out.push('<span class="tc-pace tc-pace-' + pc.phase + '">◇ ' + pc.phase + ' · 第 <b class="' + (pc.over ? 'over' : '') + '">' + pc.round + '/' + pc.budget + '</b> 轮' +
-          (pc.over ? '<em class="tc-pace-flag">⚠</em>' : '') + ' · 张力 <span class="tc-pace-bar">' + cells + '</span> ' + pc.tension + '/10 · 本场喘息 ' + pc.rests + defChip + paceReset + '</span>');
+          (pc.over ? '<em class="tc-pace-flag">超轮</em>' : '') + ' · 张力 <span class="tc-pace-bar">' + cells + '</span> ' + pc.tension + '/10 · 本场喘息 ' + pc.rests + defChip + paceReset + '</span>');
       }
     }
     /* 「缺行」只在**本场已开始之后**报：有 quest，或上一楼已经出现过 ack/pace。
@@ -3983,12 +4099,7 @@
         if (!paceOf(st).present) st.missWarns.push('本轮缺 `pace` 行 —— 按 建置/0/3/3/0 显示（默认）');
       }
     }
-    if ((st.missWarns || []).length) {
-      out.push('<div class="tc-crwarn tc-misswarn">' + st.missWarns.map(w => '<span class="tc-crwarn-line">⚠ ' + esc(w) + '</span>').join('') + '</div>');
-    }
-    if ((st.paceWarns || []).length) {
-      out.push('<div class="tc-crwarn tc-pacewarn">' + st.paceWarns.map(w => '<span class="tc-crwarn-line">⚠ ' + esc(w) + '</span>').join('') + '</div>');
-    }
+    /* v3.69.0 · 缺行与节奏提醒不再上屏：判据算完了，快照进 diag().audit（.ack / .pace） */
     out.push(renderQuest(st.quest));
 
     /* ── 交火区：dmg 行按发生顺序竖排，走出一条战斗时间线 ── */
@@ -4111,14 +4222,23 @@
 
     /* ── 战场日志（时间线） ── */
     const log = [];
+    /* v3.69.0 · 卡面零警告。
+       面板只挂在玩家屏幕上，AI 看不到任何 ⚠（console.warn 同样不进 prompt）。
+       于是「你算错了」这类黄字既改不了规则层、也改不了模型 —— 它唯一的作用是把
+       责任的账记到玩家头上。判据全部保留（下面逐条 audit.*.push），只是不再上屏。 */
+    const audit = { ad: [], cap: [], verdict: [], dual: [], ack: [], dbf: [], enemy: [], pace: [], kb: kbWarnBuf };
+    (st.missWarns || []).forEach(w => { audit.ack.push('⚠ ' + w); bumpTag('miss'); });
+    (st.paceWarns || []).forEach(w => { audit.pace.push('⚠ ' + w); bumpTag('pace'); });
+    (st.missRows || []).forEach(w => { audit.ack.push('⚠ ' + w); bumpTag('missrow'); });
     if (st.killWarn) {
       const k = st.killWarn;
       /* 「还差多少」= 还得扣掉多少 HP 才算死，不是 max-hp（满血时那是 0，读起来像「已经死了」） */
       const gap = (typeof k.hp === 'number') ? `，还需扣 ${k.hp}` : '';
-      log.push(`<div class="tc-dmg-warn tc-killwarn">⚠ 目标 HP 未归零，却写了「${esc(k.word)}」——` +
-        `死亡只能由 dmg 行把 HP 扣到 0：${esc(k.mob)} HP ${k.hp}${typeof k.max === 'number' ? '/' + k.max : ''}${gap}` +
+      bumpTag('kill');
+      audit.ack.push(`⚠ 目标 HP 未归零，却写了「${k.word}」——` +
+        `死亡只能由 dmg 行把 HP 扣到 0：${k.mob} HP ${k.hp}${typeof k.max === 'number' ? '/' + k.max : ''}${gap}` +
         (k.pct == null ? '' : `（${k.pct}%）`) +
-        (k.boss ? ' · BOSS 无处决机制' : '') + '</div>');
+        (k.boss ? ' · BOSS 无处决机制' : ''));
     }
 
     /* ══ v3.55.0 · 五条「写了却没生效」的出口（②–⑥；① 超规格阶级走配色不走 warn 通道） ══
@@ -4128,42 +4248,47 @@
     /* ② 双账本：lk 与 lock 同时在场。lk 画基因锁卡，lock 的心魔・超标・冷却没有落点。 */
     if (st.dualLocks) {
       const d = st.dualLocks;
-      log.push(`<div class="tc-dmg-warn tc-dualwarn">⚠ lk 与 lock 同时在场（lk ${esc(d.lk.join('、'))}／lock ${esc(d.lock.join('、'))}）`
-        + `——卡面只画 lk 那张卡，lock 的心魔・超标・冷却无处显示；世界书已把 lock 标为停写项，请并进 lk 一行</div>`);
+      bumpTag('dual');
+      audit.dual.push('⚠ lk 与 lock 同时在场（lk ' + d.lk.join('、') + '／lock ' + d.lock.join('、') + '）'
+        + '——卡面只画 lk 那张卡，lock 的心魔・超标・冷却无处显示；世界书已把 lock 标为停写项，请并进 lk 一行');
     }
 
     /* ③ 判词不在六选一：着色/弱点判定全部静默失效，卡面却仍有一行「判」。 */
     (st.dmgs || []).forEach(function (d) {
       if (!d.verdictBad) return;
       const who = (d.from || '?') + '→' + (d.to || '?');
-      log.push(`<div class="tc-dmg-warn tc-verdictwarn">⚠ 判「${esc(d.verdictBad)}」不在六选一（命中／暴击／闪避／格挡／破防／未破防）`
-        + `——这一刀的判定着色与弱点对账都没生效：${esc(who)}</div>`);
+      bumpTag('verdict');
+      audit.verdict.push('⚠ 判「' + d.verdictBad + '」不在六选一（命中／暴击／闪避／格挡／破防／未破防）'
+        + '——这一刀的判定着色与弱点对账都没生效：' + who);
     });
 
     /* ④ ack 缺段：世界书写「缺一段本行作废」，面板却按默认 R=3 把它当整行用。 */
     if (st.ack && st.ack.missing && st.ack.missing.length) {
-      log.push(`<div class="tc-dmg-warn tc-ackwarn">⚠ ack 行缺 ${esc(st.ack.missing.join('／'))} 段`
-        + `——世界书写明「缺一段本行作废」，面板仍按默认 R=3 计算难度与收益；请补齐 R／因／迹 三段</div>`);
+      bumpTag('ack');
+      audit.ack.push('⚠ ack 行缺 ' + st.ack.missing.join('／') + ' 段'
+        + '——世界书写明「缺一段本行作废」，面板仍按默认 R=3 计算难度与收益；请补齐 R／因／迹 三段');
     }
 
     /* ⑤ 有敌人/伤害却没有 pace 行：节奏整块退回默认值，而「相位超轮」「本场未出现高潮」
        这两类提醒都不会触发 —— 玩家会以为这局节奏没问题。 */
     if (paceStarted && !paceOf(st).present && (((st.mobs || []).length) || ((st.dmgs || []).length))) {
-      log.push('<div class="tc-dmg-warn tc-pacewarn">⚠ 有敌人或伤害行却没有 pace 行'
-        + '——相位／轮／张力／喘息全按默认显示（建置 · 张 3），相位超轮与本场未出现高潮两条提醒不会触发</div>');
+      bumpTag('pace');
+      audit.pace.push('⚠ 有敌人或伤害行却没有 pace 行'
+        + '——相位／轮／张力／喘息全按默认显示（建置 · 张 3），相位超轮与本场未出现高潮两条提醒不会触发');
     }
 
     /* ⑥ 敌人未结算：写了意图却没有 `敌：` 记录，或记录里没有结果词。
        世界书写「只写意图不算行动」，面板原先不吭声 —— 这是玩家能拿到的唯一机器证据。 */
     if (st.enemyAudit) {
       if (st.enemyAudit.noSeg) {
-        log.push('<div class="tc-dmg-warn tc-enemywarn">⚠ 敌人本楼未结算（有 mob 行但 result 无 敌：）'
-          + '——只写意图不算行动</div>');
+        bumpTag('enemy');
+        audit.enemy.push('⚠ 敌人本楼未结算（有 mob 行但 result 无 敌：）——只写意图不算行动');
       }
       if ((st.enemyAudit.symbolic || []).length) {
         const list = st.enemyAudit.symbolic.map(function (u) { return esc(u.name) + ' ' + u.dmg + ' 点'; }).join('／');
-        log.push('<div class="tc-dmg-warn tc-enemywarn tc-enemysoft">⚠ 伤害仅 1~2 点，疑象征性结算（' + list + '）'
-          + '——判定是 d100 对 DC 时，伤害须由判定档位推出；残血补刀／压制轻击可忽略本条</div>');
+        bumpTag('enemysoft');
+        audit.enemy.push('⚠ 伤害仅 1~2 点，疑象征性结算（' + list + '）'
+          + '——判定是 d100 对 DC 时，伤害须由判定档位推出；残血补刀／压制轻击可忽略本条');
       }
       (st.enemyAudit.unsettled || []).forEach(function (u) {
         const why = u.kind === 'B1'
@@ -4171,24 +4296,23 @@
           : (u.kind === 'B2'
             ? '只写了未中／格挡／闪避，缺反抗结果（判定不产生效果＝这一刀没发生）'
             : '只有动作，缺判定与结果');
-        log.push('<div class="tc-dmg-warn tc-enemywarn">⚠ 敌： 记录' + why
-          + '（' + esc(u.name) + '）——四段式：动作→目标 判定 结果</div>');
+        bumpTag('enemy');
+        audit.enemy.push('⚠ 敌： 记录' + why + '（' + u.name + '）——四段式：动作→目标 判定 结果');
       });
     }
 
     /* ⑨ v3.66.0 · `值` 对账：卡上的值必须等于卡上筹码。
        只给绝对点数，不出现百分比 —— 模型和玩家都不做乘除。 */
-    (st.adAudit || []).forEach(function (t) {
-      log.push('<div class="tc-dmg-warn tc-adwarn">' + esc(t) + '</div>');
-    });
+    (st.adAudit || []).forEach(function (t) { audit.ad.push(t); });
 
     /* ⑧ v3.65.0 · 负向状态没有宿主：`kbd<N>` 找不到同号 `kbl<N>`（或 `yzd`/`yz`）。
        一条负向状态凭空消失、计数却全对，是这类缺陷里最难自己发现的一种 ——
        玩家只会觉得「这代价好像没生效」，说不出是哪一条。 */
     (st.dbfOrphans || []).forEach(function (o) {
       const host = (o.kind === 'kb' ? 'kbl' : 'yz') + o.n;
-      log.push('<div class="tc-dmg-warn tc-dbforphan">⚠ 负向状态「' + esc(o.name) + '」找不到宿主 '
-        + esc(host) + '（未渲染）——同号配对是既有语义，补一条 ' + esc(host) + ' 才会出现在卡面上</div>');
+      bumpTag('dbf');
+      audit.dbf.push('⚠ 负向状态「' + o.name + '」找不到宿主 ' + host
+        + '（未渲染）——同号配对是既有语义，补一条 ' + host + ' 才会出现在卡面上');
     });
 
     /* ⑦ v3.65.0 · 单场限伤：BOSS／超规格 的 dmg 行越线。
@@ -4196,12 +4320,15 @@
        百分比是面板自己的换算，把换算摆到台面上，玩家会开始跟算式吵架而不是跟模型对账。 */
     (st.capAudit || []).forEach(function (c) {
       const nm = '<b>' + esc(c.name) + '</b>';
-      log.push(c.kind === 'one'
-        ? '<div class="tc-dmg-warn tc-capwarn">⚠ ' + nm + ' 单条 ' + c.one + '/' + c.capOne
-          + ' —— 单条上限按目标最大 HP 算，超出部分只作描述、不入账（本回合 ' + c.sum + '/' + c.capTurn + '）</div>'
-        : '<div class="tc-dmg-warn tc-capwarn">⚠ ' + nm + ' 本回合 ' + c.sum + '/' + c.capTurn
-          + '（单条上限 ' + c.capOne + '）—— 超出部分只作描述、不入账</div>');
+      audit.cap.push(c.kind === 'one'
+        ? (bumpTag('cap'), '⚠ ' + c.name + ' 单条 ') + c.one + '/' + c.capOne
+          + ' —— 单条上限按目标最大 HP 算，超出部分只作描述、不入账（本回合 ' + c.sum + '/' + c.capTurn + '）'
+        : (bumpTag('cap'), '⚠ ' + c.name + ' 本回合 ') + c.sum + '/' + c.capTurn
+          + '（单条上限 ' + c.capOne + '）—— 超出部分只作描述、不入账');
     });
+
+    /* v3.69.0 · 判据算完了，只是不上屏 —— 快照交给 diag()，卡面这里零输出 */
+    lastAudit = audit;
 
     (st.stateWarns || []).forEach(function (w) {
       const hpTxt = (w.max == null ? String(w.hp) : w.hp + '/' + w.max);
@@ -4210,30 +4337,32 @@
         : (w.why === 'near-zero'
           ? `HP 已归零（${hpTxt}），却标了濒死 —— 应标「已击破」`
           : `HP 还剩 ${hpTxt}（${w.pct == null ? '?' : w.pct + '%'}），却标了已击破`);
-      log.push(`<div class="tc-dmg-warn tc-statewarn">⚠ ${txt}</div>`);
+      bumpTag('state');
+      audit.ack.push('⚠ ' + txt);
     });
     (st.cdWarns || []).forEach(function (w) {
-      log.push(`<div class="tc-dmg-warn tc-cdwarn">⚠ ${esc(w)}</div>`);
+      bumpTag('cd');
+      audit.ack.push('⚠ ' + w);
     });
     (st.yzDrift || []).forEach(function (w) {
-      log.push(`<div class="tc-dmg-warn tc-yzdrift">⚠ ${esc(w)}</div>`);
+      bumpTag('yzdrift');
+      audit.kb.push('⚠ ' + w);
     });
     (st.kblDrift || []).forEach(function (w) {
-      log.push(`<div class="tc-dmg-warn tc-kbldrift">⚠ ${esc(w)}</div>`);
+      bumpTag('kbldrift');
+      audit.kb.push('⚠ ' + w);
     });
-    if ((st.missRows || []).length) {
-      log.push('<div class="tc-crwarn tc-missrow">' + st.missRows.map(function (w) {
-        return '<span class="tc-crwarn-line">⚠ ' + esc(w) + '</span>';
-      }).join('') + '</div>');
-    }
+    /* v3.69.0 · 缺行明细已进 audit.ack，卡面不再画 */
     (st.intentDrops || []).forEach(function (w) {
-      log.push('<div class="tc-dmg-warn tc-intentdrop">⚠ ' + esc(w) + '</div>');
+      bumpTag('intent');
+      audit.ack.push('⚠ ' + w);
     });
     (st.weakWarns || []).forEach(function (w) {
       const txt = w.why === 'hidden'
         ? `弱点未暴露却算进了加成：${esc(w.mob)} 的弱点还没识破（判「${esc(w.verdict || '—')}」）`
         : `未命中却算了弱点加成：${esc(w.mob)} 判「${esc(w.verdict)}」`;
-      log.push(`<div class="tc-dmg-warn tc-weakwarn">⚠ ${txt}</div>`);
+      bumpTag('weak');
+      audit.enemy.push('⚠ ' + txt);
     });
     if (st.result) log.push(`<div class="tc-line tc-result"><b>🎯 行动结果</b><span>${esc(st.result)}</span></div>`);
     if (st.world && !/^(无|—|-)$/.test(String(st.world).trim())) {
@@ -4244,7 +4373,10 @@
     out.push(renderNext(st.next));
 
     const mini = isMini();
-    return `<div class="tc-wrap${mini ? ' tc-mini' : ''}" data-tw-ver="${VERSION}">` +
+    /* data-audit：本次 render 各判据的触发条数（按类）。卡面零 ⚠ 之后，
+       断言仍然要能问「这一类到底出没出、出几条」——挂在自己这次的产物上，
+       比读全局最后一次快照可靠（多次渲染会串味）。 */
+    return `<div class="tc-wrap${mini ? ' tc-mini' : ''}" data-tw-ver="${VERSION}"${Object.keys(auditTags).length ? " data-audit='" + JSON.stringify(auditTags) + "'" : ''}>` +
       `<button class="tc-size" type="button" title="${mini ? '切换到完整面板' : '切换到紧凑面板'}">${mini ? '＋' : '－'}</button>` +
       `${out.filter(Boolean).join('')}<div class="tc-ver">tw-card v${VERSION}${mini ? ' · 紧凑' : ''}</div></div>`;
   }
@@ -6087,6 +6219,20 @@ details[open]>.tc-skfl-ar::after{content:'▴'}
       dbfOrphans: lastDbfOrphans,
       checkHints: lastCheckHints,
       adAudit: lastAdAudit,
+      /* v3.69.0 · 卡面零警告之后，这些判据只在这里可见。
+         七个键与卡面曾经报的七类一一对应：ad 值/算式·cap 限伤·verdict 判词·dual 双账本·
+         ack 缺段·dbf 无宿主负向状态·enemy 敌人结算；check 是 details.tc-check 卡内那几条
+         （角标 + 卡内三行），每条带 title。 */
+      auditTags: (function () { const o = {}; Object.keys(auditTags || {}).forEach(function (k) { o[k] = auditTags[k]; }); return o; })(),
+    audit: (function () {
+        const a = lastAudit || {};
+        return {
+          ad: (a.ad || []).slice(), cap: (a.cap || []).slice(), verdict: (a.verdict || []).slice(),
+          dual: (a.dual || []).slice(), ack: (a.ack || []).slice(), dbf: (a.dbf || []).slice(),
+          enemy: (a.enemy || []).slice(), pace: (a.pace || []).slice(), kb: (a.kb || []).slice(),
+          check: lastCheckAudit.slice()
+        };
+      })(),
     };
   }
 
